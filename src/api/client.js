@@ -1,4 +1,16 @@
-export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+const rawApiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+
+// Ensure protocol is present so browsers never treat it as a relative path
+const normalizeUrl = (url) => {
+  if (!url) return 'http://localhost:8080';
+  let cleaned = url.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(cleaned)) {
+    cleaned = `https://${cleaned}`;
+  }
+  return cleaned;
+};
+
+export const API_BASE_URL = normalizeUrl(rawApiUrl);
 
 export const getAuthToken = () => localStorage.getItem('token');
 export const setAuthToken = (token) => {
