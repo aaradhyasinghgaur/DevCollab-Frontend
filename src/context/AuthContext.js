@@ -68,7 +68,24 @@ export const AuthProvider = ({ children }) => {
       setUser(profile);
       return profile;
     } catch (err) {
-      console.error('Failed to fetch user with oauth token:', err);
+      console.warn('Could not fetch user via getMe, extracting from token payload:', err);
+      try {
+        const payloadBase64 = newToken.split('.')[1];
+        if (payloadBase64) {
+          const decoded = JSON.parse(atob(payloadBase64));
+          const fallbackUser = {
+            id: decoded.userId || decoded.sub || 'user',
+            username: decoded.sub || 'User',
+            email: decoded.email || decoded.sub || '',
+            displayName: decoded.displayName || decoded.sub || 'User',
+            avatarUrl: decoded.avatarUrl || null
+          };
+          setUser(fallbackUser);
+          return fallbackUser;
+        }
+      } catch (decodeErr) {
+        console.error('Failed to parse token payload:', decodeErr);
+      }
       setAuthToken(null);
       setTokenState(null);
       setUser(null);
