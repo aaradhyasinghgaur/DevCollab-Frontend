@@ -16,6 +16,9 @@ export class RoomSocketManager {
 
   setUserInfo(userInfo) {
     this.userInfo = userInfo;
+    if (this.connected && this.userInfo) {
+      this.sendPresence('ACTIVE');
+    }
   }
 
   connect() {

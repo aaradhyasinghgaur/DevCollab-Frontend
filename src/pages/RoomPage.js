@@ -47,7 +47,13 @@ const RoomPage = () => {
       setError(null);
       const data = await roomApi.getById(roomId);
       setRoom(data);
-      setParticipants(data?.participants || []);
+      const initialParticipants = (data?.participants || []).map((p) => {
+        if (user && String(p.userId) === String(user.id)) {
+          return { ...p, online: true };
+        }
+        return p;
+      });
+      setParticipants(initialParticipants);
       if (data && data.language) {
         setLanguage(data.language);
       }
@@ -57,7 +63,7 @@ const RoomPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [roomId]);
+  }, [roomId, user]);
 
   useEffect(() => {
     fetchRoomDetails();
@@ -110,7 +116,13 @@ const RoomPage = () => {
       }
 
       if (Array.isArray(presenceMsg.participants)) {
-        setParticipants(presenceMsg.participants);
+        const mapped = presenceMsg.participants.map((p) => {
+          if (user && String(p.userId) === String(user.id)) {
+            return { ...p, online: true };
+          }
+          return p;
+        });
+        setParticipants(mapped);
         return;
       }
 
@@ -120,13 +132,24 @@ const RoomPage = () => {
             if (String(p.userId) === String(presenceMsg.userId)) {
               return { ...p, online: presenceMsg.status === 'ACTIVE' };
             }
+            if (user && String(p.userId) === String(user.id)) {
+              return { ...p, online: true };
+            }
             return p;
           });
         });
       }
     });
 
+    // Send periodic presence heartbeat every 20 seconds
+    const heartbeatInterval = setInterval(() => {
+      if (manager && manager.connected) {
+        manager.sendPresence('ACTIVE');
+      }
+    }, 20000);
+
     return () => {
+      clearInterval(heartbeatInterval);
       if (unsubExecution) unsubExecution();
       if (unsubPresence) unsubPresence();
       manager.disconnect();
