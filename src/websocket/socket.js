@@ -32,6 +32,11 @@ export const getWsUrl = () => {
   return `${base}/ws`;
 };
 
+export const getNativeWsUrl = () => {
+  const wsUrl = getWsUrl();
+  return wsUrl.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://');
+};
+
 export class RoomSocketManager {
   constructor(roomId, onConnectCallback, userInfo = null, onDisconnectCallback = null) {
     this.roomId = roomId;
@@ -43,6 +48,7 @@ export class RoomSocketManager {
     this.onConnectCallback = onConnectCallback;
     this.onDisconnectCallback = onDisconnectCallback;
     this.connected = false;
+    this.fallbackToSockJs = false;
   }
 
   setUserInfo(userInfo) {
@@ -55,63 +61,89 @@ export class RoomSocketManager {
   connect() {
     const token = getAuthToken();
     const wsUrl = getWsUrl();
-    console.log('[DevCollab] Connecting to WebSocket at:', wsUrl);
+    const nativeWsUrl = getNativeWsUrl();
 
-    this.client = new Client({
-      webSocketFactory: () => new SockJS(wsUrl),
-      connectHeaders: token ? { Authorization: `Bearer ${token}` } : {},
-      debug: (msg) => {
-        // Helpful logging to diagnose STOMP frames and connectivity in browser console
-        console.log('[DevCollab STOMP]', msg);
-      },
-      reconnectDelay: 3000,
-      heartbeatIncoming: 0, // Spring SimpleBroker doesn't support heartbeat scheduler by default
-      heartbeatOutgoing: 0, // Disabled to prevent connection flapping and premature timeout drops
-      onConnect: (frame) => {
-        this.connected = true;
-        if (this.onConnectCallback) {
-          try {
-            this.onConnectCallback(frame);
-          } catch (e) {
-            console.error('[DevCollab] onConnectCallback error:', e);
+    console.log('[DevCollab] Attempting connection. Native WS:', nativeWsUrl, '| SockJS URL:', wsUrl);
+
+    const initClient = () => {
+      const config = {
+        connectHeaders: token ? { Authorization: `Bearer ${token}` } : {},
+        debug: (msg) => {
+          console.log('[DevCollab STOMP]', msg);
+        },
+        reconnectDelay: 3000,
+        heartbeatIncoming: 0,
+        heartbeatOutgoing: 0,
+        onConnect: (frame) => {
+          this.connected = true;
+          console.log('[DevCollab] Connected successfully via', this.fallbackToSockJs ? 'SockJS' : 'Native WebSocket');
+          if (this.onConnectCallback) {
+            try {
+              this.onConnectCallback(frame);
+            } catch (e) {
+              console.error('[DevCollab] onConnectCallback error:', e);
+            }
           }
-        }
 
-        // Resubscribe all registered topics upon connection or reconnection
-        this.subCallbacks.forEach((cb, topic) => {
-          this._createStompSubscription(topic, cb);
-        });
+          // Resubscribe all registered topics upon connection or reconnection
+          this.subCallbacks.forEach((cb, topic) => {
+            this._createStompSubscription(topic, cb);
+          });
 
-        // Flush any messages that were queued while connecting
-        this._flushOutgoingQueue();
+          // Flush any messages that were queued while connecting
+          this._flushOutgoingQueue();
 
-        // Send initial presence ping
-        this.sendPresence('ACTIVE');
-      },
-      onDisconnect: (frame) => {
-        this.connected = false;
-        if (this.onDisconnectCallback) {
-          try {
-            this.onDisconnectCallback(frame);
-          } catch (e) {}
+          // Send initial presence ping
+          this.sendPresence('ACTIVE');
+        },
+        onDisconnect: (frame) => {
+          this.connected = false;
+          if (this.onDisconnectCallback) {
+            try {
+              this.onDisconnectCallback(frame);
+            } catch (e) {}
+          }
+        },
+        onWebSocketClose: (event) => {
+          this.connected = false;
+          if (this.onDisconnectCallback) {
+            try {
+              this.onDisconnectCallback();
+            } catch (e) {}
+          }
+
+          // Automatic fallback to SockJS if native WebSocket fails or is blocked by network
+          if (!this.fallbackToSockJs && event && event.code !== 1000) {
+            console.warn('[DevCollab] Native WebSocket closed unexpectedly, switching transport to SockJS...');
+            this.fallbackToSockJs = true;
+            setTimeout(() => {
+              if (this.client) {
+                try { this.client.deactivate(); } catch (e) {}
+                this.client = initClient();
+                this.client.activate();
+              }
+            }, 600);
+          }
+        },
+        onStompError: (frame) => {
+          console.error('[DevCollab STOMP error]:', frame.headers ? frame.headers['message'] : frame, frame.body);
+        },
+        onWebSocketError: (event) => {
+          console.error('[DevCollab WebSocket error]:', event);
         }
-      },
-      onWebSocketClose: () => {
-        this.connected = false;
-        if (this.onDisconnectCallback) {
-          try {
-            this.onDisconnectCallback();
-          } catch (e) {}
-        }
-      },
-      onStompError: (frame) => {
-        console.error('[DevCollab STOMP error]:', frame.headers ? frame.headers['message'] : frame, frame.body);
-      },
-      onWebSocketError: (event) => {
-        console.error('[DevCollab WebSocket error]:', event);
+      };
+
+      if (this.fallbackToSockJs) {
+        config.webSocketFactory = () => new SockJS(wsUrl);
+      } else {
+        // Native WebSocket is primary: fastest, avoids SockJS 405 / CORS issues on Railway
+        config.brokerURL = nativeWsUrl;
       }
-    });
 
+      return new Client(config);
+    };
+
+    this.client = initClient();
     this.client.activate();
   }
 
