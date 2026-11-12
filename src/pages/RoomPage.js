@@ -90,7 +90,10 @@ const RoomPage = () => {
       () => {
         setSocketConnected(true);
       },
-      userRef.current
+      userRef.current,
+      () => {
+        setSocketConnected(false);
+      }
     );
 
     setSocketManager(manager);

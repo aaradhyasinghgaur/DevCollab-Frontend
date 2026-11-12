@@ -2,25 +2,27 @@ import { Client } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { getAuthToken, API_BASE_URL } from '../api/client';
 
-const getWsUrl = () => {
+const isValidUuid = (val) =>
+  typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
+export const getWsUrl = () => {
   const rawWs = process.env.REACT_APP_WS_URL;
   if (rawWs && rawWs.trim()) {
-    // SockJS requires http/https URL scheme, convert ws/wss if provided
+    // SockJS requires http/https scheme, convert ws/wss if provided
     return rawWs.trim().replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
   }
   return `${API_BASE_URL.replace(/\/+$/, '')}/ws`;
 };
 
-const WS_URL = getWsUrl();
-
 export class RoomSocketManager {
-  constructor(roomId, onConnectCallback, userInfo = null) {
+  constructor(roomId, onConnectCallback, userInfo = null, onDisconnectCallback = null) {
     this.roomId = roomId;
     this.userInfo = userInfo;
     this.client = null;
     this.subscriptions = new Map(); // topic -> stompSubscription
     this.subCallbacks = new Map(); // topic -> callback function
     this.onConnectCallback = onConnectCallback;
+    this.onDisconnectCallback = onDisconnectCallback;
     this.connected = false;
   }
 
@@ -33,21 +35,29 @@ export class RoomSocketManager {
 
   connect() {
     const token = getAuthToken();
+    const wsUrl = getWsUrl();
 
     this.client = new Client({
-      webSocketFactory: () => new SockJS(WS_URL),
+      webSocketFactory: () => new SockJS(wsUrl),
       connectHeaders: token ? { Authorization: `Bearer ${token}` } : {},
-      debug: () => {}, // Disable noisy logs in production
-      reconnectDelay: 4000,
-      heartbeatIncoming: 4000,
-      heartbeatOutgoing: 4000,
+      debug: (msg) => {
+        // Helpful logging to diagnose STOMP frames and connectivity in browser console
+        console.log('[DevCollab STOMP]', msg);
+      },
+      reconnectDelay: 3000,
+      heartbeatIncoming: 0, // Spring SimpleBroker doesn't support heartbeat scheduler by default
+      heartbeatOutgoing: 0, // Disabled to prevent connection flapping and premature timeout drops
       onConnect: (frame) => {
         this.connected = true;
         if (this.onConnectCallback) {
-          this.onConnectCallback(frame);
+          try {
+            this.onConnectCallback(frame);
+          } catch (e) {
+            console.error('[DevCollab] onConnectCallback error:', e);
+          }
         }
 
-        // Resubscribe any registered topics upon connection or reconnection
+        // Resubscribe all registered topics upon connection or reconnection
         this.subCallbacks.forEach((cb, topic) => {
           this._createStompSubscription(topic, cb);
         });
@@ -55,14 +65,27 @@ export class RoomSocketManager {
         // Send initial presence ping
         this.sendPresence('ACTIVE');
       },
-      onDisconnect: () => {
+      onDisconnect: (frame) => {
         this.connected = false;
+        if (this.onDisconnectCallback) {
+          try {
+            this.onDisconnectCallback(frame);
+          } catch (e) {}
+        }
+      },
+      onWebSocketClose: () => {
+        this.connected = false;
+        if (this.onDisconnectCallback) {
+          try {
+            this.onDisconnectCallback();
+          } catch (e) {}
+        }
       },
       onStompError: (frame) => {
-        console.error('STOMP protocol error:', frame.headers['message'], frame.body);
+        console.error('[DevCollab STOMP error]:', frame.headers ? frame.headers['message'] : frame, frame.body);
       },
       onWebSocketError: (event) => {
-        console.error('WebSocket connection error:', event);
+        console.error('[DevCollab WebSocket error]:', event);
       }
     });
 
@@ -71,7 +94,7 @@ export class RoomSocketManager {
 
   _createStompSubscription(topic, callback) {
     if (!this.client || !this.client.connected) return null;
-    const fullTopic = `/topic/room/${this.roomId}/${topic}`;
+    const fullTopic = topic.startsWith('/') ? topic : `/topic/room/${this.roomId}/${topic}`;
     try {
       const existing = this.subscriptions.get(topic);
       if (existing) {
@@ -88,7 +111,7 @@ export class RoomSocketManager {
       this.subscriptions.set(topic, sub);
       return sub;
     } catch (err) {
-      console.warn(`Failed to subscribe to ${fullTopic}:`, err);
+      console.warn(`[DevCollab] Failed to subscribe to ${fullTopic}:`, err);
       return null;
     }
   }
@@ -96,7 +119,7 @@ export class RoomSocketManager {
   subscribe(topic, callback) {
     this.subCallbacks.set(topic, callback);
 
-    if (this.connected) {
+    if (this.client && this.client.connected) {
       this._createStompSubscription(topic, callback);
     }
 
@@ -111,45 +134,71 @@ export class RoomSocketManager {
   }
 
   send(destination, body) {
-    if (this.client && (this.connected || this.client.connected)) {
+    const isSocketReady = this.client && (this.connected || this.client.connected);
+    if (isSocketReady) {
       try {
+        const dest = destination.startsWith('/') ? destination : `/app/room/${this.roomId}/${destination}`;
         this.client.publish({
-          destination: `/app/room/${this.roomId}/${destination}`,
+          destination: dest,
           body: JSON.stringify(body)
         });
       } catch (err) {
-        console.error(`Failed to publish to /app/room/${this.roomId}/${destination}:`, err);
+        console.error(`[DevCollab] Failed to publish to ${destination}:`, err);
       }
     } else {
-      console.warn(`DevCollab WebSocket: cannot send to ${destination}, socket not connected`);
+      console.warn(`[DevCollab] WebSocket: cannot send to ${destination}, socket not connected`);
     }
   }
 
-  sendChatMessage(content, type = 'CHAT') {
-    this.send('chat.send', { content, type });
+  sendChatMessage(content, type = 'CHAT', extra = {}) {
+    const sender = this.userInfo?.username || this.userInfo?.email || extra.senderName || extra.username || 'anonymous';
+    const validUserId = (this.userInfo?.id && isValidUuid(this.userInfo.id))
+      ? this.userInfo.id
+      : (isValidUuid(extra.senderId) ? extra.senderId : undefined);
+
+    const payload = {
+      content: content ? content.trim() : '',
+      type,
+      senderName: sender,
+      sender: sender,
+      username: sender,
+      displayName: this.userInfo?.displayName || this.userInfo?.username || sender,
+      ...(validUserId ? { senderId: validUserId, userId: validUserId } : {}),
+      timestamp: Date.now()
+    };
+
+    this.send('chat.send', payload);
   }
 
   sendCursor(lineNumber, columnNumber) {
+    const validUserId = (this.userInfo?.id && isValidUuid(this.userInfo.id)) ? this.userInfo.id : undefined;
+
     this.send('cursor', {
       lineNumber: lineNumber || 1,
       column: columnNumber || 1,
-      columnNumber: columnNumber || 1
+      columnNumber: columnNumber || 1,
+      username: this.userInfo?.username,
+      displayName: this.userInfo?.displayName || this.userInfo?.username || 'Peer',
+      ...(validUserId ? { userId: validUserId } : {})
     });
   }
 
   sendPresence(status = 'ACTIVE', extra = {}) {
+    const validUserId = (this.userInfo?.id && isValidUuid(this.userInfo.id))
+      ? this.userInfo.id
+      : (isValidUuid(extra.userId) ? extra.userId : undefined);
+
     this.send('presence', {
       status,
       timestamp: Date.now(),
-      userId: this.userInfo?.id ? String(this.userInfo.id) : (extra.userId ? String(extra.userId) : undefined),
       username: this.userInfo?.username || extra.username,
       displayName: this.userInfo?.displayName || this.userInfo?.username || extra.displayName,
-      ...extra
+      ...(validUserId ? { userId: validUserId } : {})
     });
   }
 
   leave() {
-    if (this.client && this.connected) {
+    if (this.client && (this.connected || this.client.connected)) {
       try {
         this.sendPresence('LEAVE');
       } catch (e) {}
@@ -158,7 +207,6 @@ export class RoomSocketManager {
   }
 
   sendCodeEdit(operation) {
-    // operation format: { type: 'INSERT'|'DELETE', position, text, length, revision }
     this.send('code.edit', operation);
   }
 

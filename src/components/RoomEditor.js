@@ -39,6 +39,9 @@ const RoomEditor = ({
   const isRemoteChange = useRef(false);
   const clientIdRef = useRef('client-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now());
 
+  // Debounced full sync timer reference
+  const fullSyncTimerRef = useRef(null);
+
   // Peer cursor decorations storage: Map<userId, decorationIds[]>
   const peerDecorationsRef = useRef(new Map());
 
@@ -62,7 +65,7 @@ const RoomEditor = ({
         }
       }
     } catch (err) {
-      console.error('Failed to load initial code from backend:', err);
+      console.error('[DevCollab] Failed to load initial code from backend:', err);
     } finally {
       setInitialLoading(false);
     }
@@ -105,7 +108,7 @@ const RoomEditor = ({
 
       const socket = socketManagerRef.current;
       if (!socket || (!socket.connected && !socket.client?.connected)) {
-        console.warn('DevCollab: WebSocket not connected, edit not broadcasted');
+        console.warn('[DevCollab] WebSocket not connected, edit not broadcasted');
         return;
       }
 
@@ -132,7 +135,7 @@ const RoomEditor = ({
         if (type) {
           socket.sendCodeEdit({
             clientId: clientIdRef.current,
-            userId: validUserId,
+            ...(validUserId ? { userId: validUserId } : {}),
             type,
             position: change.rangeOffset,
             text: change.text || '',
@@ -148,13 +151,34 @@ const RoomEditor = ({
           });
         }
       });
+
+      // Debounce a full-sync broadcast backup (1.5s after typing pauses)
+      // Guarantees room-wide consistency even if a packet is delayed or dropped
+      if (fullSyncTimerRef.current) {
+        clearTimeout(fullSyncTimerRef.current);
+      }
+      fullSyncTimerRef.current = setTimeout(() => {
+        const liveSocket = socketManagerRef.current;
+        if (liveSocket && (liveSocket.connected || liveSocket.client?.connected) && editorRef.current) {
+          const currentCode = editorRef.current.getValue();
+          liveSocket.sendCodeEdit({
+            clientId: clientIdRef.current,
+            ...(validUserId ? { userId: validUserId } : {}),
+            revision: currentRevision.current,
+            fullContent: currentCode
+          });
+        }
+      }, 1500);
     });
     listenerDisposablesRef.current.push(contentDisp);
   };
 
-  // Clean up listeners on component unmount
+  // Clean up listeners and timers on component unmount
   useEffect(() => {
     return () => {
+      if (fullSyncTimerRef.current) {
+        clearTimeout(fullSyncTimerRef.current);
+      }
       listenerDisposablesRef.current.forEach((d) => {
         try { d.dispose(); } catch (e) {}
       });
@@ -190,7 +214,7 @@ const RoomEditor = ({
     const handleRemoteCode = (msg) => {
       if (!editorRef.current || !monacoRef.current || !msg) return;
 
-      // 1. Skip echo from this client instance (100% reliable across tabs & accounts)
+      // Skip echo from this client instance (100% reliable across tabs & accounts)
       if (msg.clientId && msg.clientId === clientIdRef.current) {
         if (typeof msg.revision === 'number') {
           currentRevision.current = msg.revision;
@@ -198,7 +222,7 @@ const RoomEditor = ({
         return;
       }
 
-      // 2. Skip echo if senderUserId matches current user (fallback when clientId absent)
+      // Skip echo if sender matches current user and clientId is absent
       const senderUserId = msg.userId || msg.senderId;
       const currentUserId = userRef.current?.id;
       if (!msg.clientId && senderUserId && currentUserId && String(senderUserId) === String(currentUserId)) {
@@ -245,7 +269,7 @@ const RoomEditor = ({
           );
         }
 
-        if (rangeToApply) {
+        if (rangeToApply && msg.type) {
           if (msg.type === 'DELETE') {
             textToApply = '';
           }
@@ -265,7 +289,6 @@ const RoomEditor = ({
 
             const isSameLine = rangeToApply.startLineNumber === currentPosition.lineNumber;
             if (isSameLine) {
-              // Remote edit occurred on the same line at or before local cursor
               if (rangeToApply.startColumn <= currentPosition.column) {
                 const textLen = textToApply ? textToApply.length : 0;
                 const replacedLen = rangeToApply.endColumn - rangeToApply.startColumn;
@@ -273,7 +296,6 @@ const RoomEditor = ({
                 newCol = Math.max(rangeToApply.startColumn, currentPosition.column + delta);
               }
             } else if (rangeToApply.startLineNumber < currentPosition.lineNumber) {
-              // Remote edit was on an earlier line, adjust for added/removed linebreaks
               const addedLines = textToApply ? textToApply.split('\n').length - 1 : 0;
               const removedLines = rangeToApply.endLineNumber - rangeToApply.startLineNumber;
               const lineDelta = addedLines - removedLines;
@@ -293,7 +315,7 @@ const RoomEditor = ({
           }
         }
       } catch (err) {
-        console.error('Error applying remote OT edit:', err);
+        console.error('[DevCollab] Error applying remote OT edit:', err);
         if (msg.fullContent != null && editor.getValue() !== msg.fullContent) {
           const pos = editor.getPosition();
           editor.setValue(msg.fullContent);
@@ -308,12 +330,11 @@ const RoomEditor = ({
 
     // 2. Subscribe to Remote Cursors
     const unsubscribeCursor = socketManager.subscribe('cursor', (cursorMsg) => {
-      if (!editorRef.current || !monacoRef.current) return;
-      if (!cursorMsg) return;
+      if (!editorRef.current || !monacoRef.current || !cursorMsg) return;
 
       const remoteUserId = cursorMsg.userId;
       const currentUserId = userRef.current?.id;
-      if (remoteUserId && currentUserId && String(remoteUserId) === String(currentUserId)) return; // Skip own cursor
+      if (remoteUserId && currentUserId && String(remoteUserId) === String(currentUserId)) return;
 
       const editor = editorRef.current;
       const monaco = monacoRef.current;

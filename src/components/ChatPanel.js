@@ -3,6 +3,9 @@ import { chatApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { FiSend, FiMessageSquare } from 'react-icons/fi';
 
+const isValidUuid = (val) =>
+  typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
 const ChatPanel = ({ roomId, socketManager }) => {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
@@ -40,29 +43,82 @@ const ChatPanel = ({ roomId, socketManager }) => {
   useEffect(() => {
     if (!socketManager) return;
 
-    const unsubscribe = socketManager.subscribe('chat', (newMsg) => {
+    const handleIncomingMessage = (newMsg) => {
       if (!newMsg) return;
       setMessages((prev) => {
+        // De-duplicate if message with this id already exists
         if (newMsg.id && prev.some((m) => String(m.id) === String(newMsg.id))) {
           return prev;
         }
+
+        // If there was a pending optimistic message matching this content, replace it
+        const currentUserId = user?.id;
+        const currentUsername = user?.username;
+        const currentEmail = user?.email;
+        const msgSenderId = newMsg.senderId || newMsg.userId;
+        const msgSenderName = newMsg.senderName || newMsg.sender || newMsg.username;
+
+        const isMe = (currentUserId && msgSenderId && String(msgSenderId) === String(currentUserId)) ||
+                     (currentUsername && msgSenderName === currentUsername) ||
+                     (currentEmail && msgSenderName === currentEmail);
+
+        if (isMe) {
+          const pendingIdx = prev.findIndex((m) => m.pending && m.content === newMsg.content);
+          if (pendingIdx !== -1) {
+            const updated = [...prev];
+            updated[pendingIdx] = newMsg;
+            return updated;
+          }
+        }
+
         return [...prev, newMsg];
       });
-    });
+    };
+
+    // Subscribe to both 'chat' and 'chat.send' topics for full backend compatibility
+    const unsubChat = socketManager.subscribe('chat', handleIncomingMessage);
+    const unsubChatSend = socketManager.subscribe('chat.send', handleIncomingMessage);
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      if (unsubChat) unsubChat();
+      if (unsubChatSend) unsubChatSend();
     };
-  }, [socketManager]);
+  }, [socketManager, user?.id, user?.username, user?.email]);
 
   const handleSendMessage = (e) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
+    const trimmed = inputText.trim();
+    if (!trimmed) return;
 
-    if (socketManager && socketManager.connected) {
-      socketManager.sendChatMessage(inputText.trim());
-      setInputText('');
+    const isConnected = socketManager && (socketManager.connected || socketManager.client?.connected);
+    if (!isConnected) {
+      alert('Chat is currently connecting to the room. Please wait a moment and try again.');
+      return;
     }
+
+    // Optimistic message update for instant UI feedback
+    const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7);
+    const validUserId = isValidUuid(user?.id) ? user.id : undefined;
+    const optimisticMsg = {
+      id: tempId,
+      content: trimmed,
+      type: 'CHAT',
+      senderId: validUserId,
+      senderName: user?.username || user?.email || user?.displayName || 'Me',
+      displayName: user?.displayName || user?.username || user?.email || 'Me',
+      timestamp: Date.now(),
+      createdAt: new Date().toISOString(),
+      pending: true
+    };
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setInputText('');
+
+    socketManager.sendChatMessage(trimmed, 'CHAT', {
+      senderId: validUserId,
+      senderName: user?.username || user?.email,
+      username: user?.username || user?.email,
+      displayName: user?.displayName || user?.username || 'Collaborator'
+    });
   };
 
   return (
@@ -92,9 +148,14 @@ const ChatPanel = ({ roomId, socketManager }) => {
           </div>
         ) : (
           messages.map((msg, index) => {
-            const isMe = (user?.id && msg.senderId && String(msg.senderId) === String(user.id)) ||
-                         (user?.username && msg.senderName === user.username) ||
-                         (user?.displayName && msg.senderName === user.displayName);
+            const senderDisplayName = msg.displayName || msg.senderName || msg.sender || msg.username || 'Collaborator';
+            const msgSenderId = msg.senderId || msg.userId;
+            const msgSenderName = msg.senderName || msg.sender || msg.username;
+
+            const isMe = (user?.id && msgSenderId && String(msgSenderId) === String(user.id)) ||
+                         (user?.username && msgSenderName === user.username) ||
+                         (user?.displayName && msgSenderName === user.displayName) ||
+                         (user?.email && msgSenderName === user.email);
             const isSystem = msg.type === 'JOIN' || msg.type === 'LEAVE';
 
             if (isSystem) {
@@ -107,7 +168,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
               );
             }
 
-            const senderInitial = (msg.senderName || 'U').charAt(0).toUpperCase();
+            const senderInitial = senderDisplayName.charAt(0).toUpperCase();
             const timeRaw = msg.createdAt || msg.timestamp;
             const timeStr = timeRaw
               ? new Date(timeRaw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -127,7 +188,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
                 <div className={`max-w-[75%] ${isMe ? 'items-end' : 'items-start'} flex flex-col`}>
                   {!isMe && (
                     <span className="mb-1 text-[10px] font-semibold text-gray-400">
-                      {msg.senderName || 'Peer'}
+                      {senderDisplayName}
                     </span>
                   )}
 
@@ -141,11 +202,18 @@ const ChatPanel = ({ roomId, socketManager }) => {
                     {msg.content}
                   </div>
 
-                  {timeStr && (
-                    <span className="mt-0.5 text-[9px] text-gray-500">
-                      {timeStr}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1 mt-0.5">
+                    {timeStr && (
+                      <span className="text-[9px] text-gray-500">
+                        {timeStr}
+                      </span>
+                    )}
+                    {msg.pending && (
+                      <span className="text-[9px] text-purple-400 animate-pulse">
+                        sending...
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -159,7 +227,11 @@ const ChatPanel = ({ roomId, socketManager }) => {
         <div className="flex items-center gap-2 rounded-xl border border-gray-800 bg-slate-900 px-3 py-1.5 focus-within:border-purple-500">
           <input
             type="text"
-            placeholder="Type a message..."
+            placeholder={
+              socketManager && (socketManager.connected || socketManager.client?.connected)
+                ? 'Type a message...'
+                : 'Connecting to chat...'
+            }
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             className="flex-1 bg-transparent text-xs text-white placeholder-gray-500 outline-none"
