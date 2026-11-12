@@ -26,7 +26,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
         setMessages(history);
       }
     } catch (err) {
-      console.error('Failed to load chat history:', err);
+      console.error('[DevCollab] Failed to load chat history:', err);
     } finally {
       setLoading(false);
     }
@@ -63,24 +63,15 @@ const ChatPanel = ({ roomId, socketManager }) => {
           return prev;
         }
 
-        // If there was a pending optimistic message matching this content, replace it
-        const currentUserId = user?.id;
-        const currentUsername = user?.username;
-        const currentEmail = user?.email;
-        const msgSenderId = newMsg.senderId || newMsg.userId;
-        const msgSenderName = newMsg.senderName || newMsg.sender || newMsg.username;
-
-        const isMe = (currentUserId && msgSenderId && String(msgSenderId) === String(currentUserId)) ||
-                     (currentUsername && msgSenderName === currentUsername) ||
-                     (currentEmail && msgSenderName === currentEmail);
-
-        if (isMe) {
-          const pendingIdx = prev.findIndex((m) => m.pending && m.content === newMsg.content);
-          if (pendingIdx !== -1) {
-            const updated = [...prev];
-            updated[pendingIdx] = newMsg;
-            return updated;
-          }
+        // If there was an optimistic pending message matching this content, replace it with confirmed message
+        const pendingIdx = prev.findIndex((m) => m.pending && m.content === newMsg.content);
+        if (pendingIdx !== -1) {
+          const updated = [...prev];
+          updated[pendingIdx] = {
+            ...newMsg,
+            pending: false
+          };
+          return updated;
         }
 
         return [...prev, newMsg];
@@ -95,7 +86,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
       if (unsubChat) unsubChat();
       if (unsubChatSend) unsubChatSend();
     };
-  }, [socketManager, user?.id, user?.username, user?.email]);
+  }, [socketManager]);
 
   const handleSendMessage = (e) => {
     e.preventDefault();
@@ -119,11 +110,16 @@ const ChatPanel = ({ roomId, socketManager }) => {
     setMessages((prev) => [...prev, optimisticMsg]);
     setInputText('');
 
+    // Safety timeout: clear pending status after 4 seconds even in high-latency conditions
+    setTimeout(() => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempId && m.pending ? { ...m, pending: false } : m))
+      );
+    }, 4000);
+
     const payloadExtra = {
       senderId: validUserId,
-      senderName: user?.username || user?.email,
-      username: user?.username || user?.email,
-      displayName: user?.displayName || user?.username || 'Collaborator'
+      senderName: user?.username || user?.email
     };
 
     // Send immediately or queue in socketManager buffer until connected

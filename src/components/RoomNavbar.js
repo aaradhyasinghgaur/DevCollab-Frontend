@@ -78,7 +78,12 @@ const RoomNavbar = ({ room, socketManager }) => {
       {/* Left: Back / Logo / Room Title */}
       <div className="flex items-center gap-4">
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={() => {
+            if (socketManager) {
+              socketManager.leave();
+            }
+            navigate('/dashboard');
+          }}
           title="Back to Workspace Dashboard"
           className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-800 bg-slate-900 text-gray-400 transition hover:bg-slate-800 hover:text-white"
         >

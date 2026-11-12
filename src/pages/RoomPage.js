@@ -143,22 +143,40 @@ const RoomPage = () => {
         return;
       }
 
-      if (Array.isArray(presenceMsg.participants)) {
+      const isLeave = presenceMsg.type === 'LEAVE' ||
+                      presenceMsg.status === 'LEAVE' ||
+                      presenceMsg.type === 'OFFLINE' ||
+                      presenceMsg.status === 'OFFLINE';
+
+      // 1. If backend gave a full updated participants list, use it
+      if (Array.isArray(presenceMsg.participants) && presenceMsg.participants.length > 0) {
         const mapped = presenceMsg.participants.map((p) => {
           if (currentUserId && String(p.userId) === String(currentUserId)) {
             return { ...p, online: true };
           }
-          return p;
+          return { ...p, online: p.online === true || p.online === 'true' };
         });
         setParticipants(mapped);
         return;
       }
 
+      // 2. Direct atomic presence update for the specific user
       if (presenceMsg.userId) {
         setParticipants((prev) => {
+          const exists = prev.some((p) => String(p.userId) === String(presenceMsg.userId));
+          if (!exists && !isLeave) {
+            const newParticipant = {
+              userId: presenceMsg.userId,
+              displayName: presenceMsg.displayName || presenceMsg.username || 'Collaborator',
+              online: true,
+              role: 'EDITOR'
+            };
+            return [...prev, newParticipant];
+          }
+
           return prev.map((p) => {
             if (String(p.userId) === String(presenceMsg.userId)) {
-              return { ...p, online: presenceMsg.status === 'ACTIVE' };
+              return { ...p, online: !isLeave };
             }
             if (currentUserId && String(p.userId) === String(currentUserId)) {
               return { ...p, online: true };
@@ -169,18 +187,31 @@ const RoomPage = () => {
       }
     });
 
-    // Send periodic presence heartbeat every 20 seconds
+    // Send periodic presence heartbeat every 15 seconds
     const heartbeatInterval = setInterval(() => {
-      if (manager && manager.connected) {
-        manager.sendPresence('ACTIVE');
+      if (manager && (manager.connected || manager.client?.connected)) {
+        const currentUser = userRef.current;
+        manager.sendPresence('ACTIVE', {
+          username: currentUser?.username || currentUser?.email,
+          userId: currentUser?.id,
+          displayName: currentUser?.displayName || currentUser?.username
+        });
       }
-    }, 20000);
+    }, 15000);
+
+    const handleBeforeUnload = () => {
+      if (manager) {
+        manager.leave();
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       clearInterval(heartbeatInterval);
       if (unsubExecution) unsubExecution();
       if (unsubPresence) unsubPresence();
-      manager.disconnect();
+      manager.leave();
       setSocketManager(null);
       setSocketConnected(false);
     };
@@ -190,6 +221,11 @@ const RoomPage = () => {
   useEffect(() => {
     if (socketManager && user) {
       socketManager.setUserInfo(user);
+      socketManager.sendPresence('ACTIVE', {
+        username: user.username || user.email,
+        userId: user.id,
+        displayName: user.displayName || user.username
+      });
     }
   }, [socketManager, user]);
 

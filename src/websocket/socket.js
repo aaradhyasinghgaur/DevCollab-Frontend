@@ -173,15 +173,12 @@ export class RoomSocketManager {
       ? this.userInfo.id
       : (isValidUuid(extra.senderId) ? extra.senderId : undefined);
 
+    // Strictly match Jackson ChatMessageDto fields to avoid UnrecognizedPropertyException on backend
     const payload = {
       content: content ? content.trim() : '',
       type,
       senderName: sender,
-      sender: sender,
-      username: sender,
-      displayName: this.userInfo?.displayName || this.userInfo?.username || sender,
-      ...(validUserId ? { senderId: validUserId, userId: validUserId } : {}),
-      timestamp: Date.now()
+      ...(validUserId ? { senderId: validUserId } : {})
     };
 
     this.send('chat.send', payload);
@@ -205,11 +202,15 @@ export class RoomSocketManager {
       ? this.userInfo.id
       : (isValidUuid(extra.userId) ? extra.userId : undefined);
 
+    const username = this.userInfo?.username || this.userInfo?.email || extra.username;
+    const displayName = this.userInfo?.displayName || this.userInfo?.username || extra.displayName || 'Collaborator';
+
     this.send('presence', {
       status,
+      type: status,
       timestamp: Date.now(),
-      username: this.userInfo?.username || extra.username,
-      displayName: this.userInfo?.displayName || this.userInfo?.username || extra.displayName,
+      username: username || 'anonymous',
+      displayName: displayName,
       ...(validUserId ? { userId: validUserId } : {})
     });
   }
@@ -217,7 +218,18 @@ export class RoomSocketManager {
   leave() {
     if (this.client && (this.connected || this.client.connected)) {
       try {
-        this.sendPresence('LEAVE');
+        const validUserId = (this.userInfo?.id && isValidUuid(this.userInfo.id)) ? this.userInfo.id : undefined;
+        const username = this.userInfo?.username || this.userInfo?.email;
+        const displayName = this.userInfo?.displayName || this.userInfo?.username || 'Collaborator';
+
+        this.send('presence', {
+          status: 'LEAVE',
+          type: 'LEAVE',
+          timestamp: Date.now(),
+          username: username || 'anonymous',
+          displayName: displayName,
+          ...(validUserId ? { userId: validUserId } : {})
+        });
       } catch (e) {}
     }
     this.disconnect();
