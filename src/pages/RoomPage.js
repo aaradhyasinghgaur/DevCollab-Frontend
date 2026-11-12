@@ -36,7 +36,11 @@ const RoomPage = () => {
   // Socket Manager state & reference
   const [socketManager, setSocketManager] = useState(null);
   const [socketConnected, setSocketConnected] = useState(false);
-  const socketManagerRef = useRef(null);
+  const userRef = useRef(user);
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
 
   // Ref to extract latest code from RoomEditor
   const getCodeRef = useRef(null);
@@ -86,10 +90,9 @@ const RoomPage = () => {
       () => {
         setSocketConnected(true);
       },
-      user
+      userRef.current
     );
 
-    socketManagerRef.current = manager;
     setSocketManager(manager);
     manager.connect();
 
@@ -115,8 +118,10 @@ const RoomPage = () => {
     const unsubPresence = manager.subscribe('presence', (presenceMsg) => {
       if (!presenceMsg) return;
 
+      const currentUserId = userRef.current?.id;
+
       if (presenceMsg.type === 'KICKED' || presenceMsg.status === 'KICKED') {
-        if (String(presenceMsg.userId) === String(user?.id)) {
+        if (currentUserId && String(presenceMsg.userId) === String(currentUserId)) {
           alert(presenceMsg.message || 'You have been removed from this room by the owner.');
           navigate('/dashboard');
           return;
@@ -137,7 +142,7 @@ const RoomPage = () => {
 
       if (Array.isArray(presenceMsg.participants)) {
         const mapped = presenceMsg.participants.map((p) => {
-          if (user && String(p.userId) === String(user.id)) {
+          if (currentUserId && String(p.userId) === String(currentUserId)) {
             return { ...p, online: true };
           }
           return p;
@@ -152,7 +157,7 @@ const RoomPage = () => {
             if (String(p.userId) === String(presenceMsg.userId)) {
               return { ...p, online: presenceMsg.status === 'ACTIVE' };
             }
-            if (user && String(p.userId) === String(user.id)) {
+            if (currentUserId && String(p.userId) === String(currentUserId)) {
               return { ...p, online: true };
             }
             return p;
@@ -173,7 +178,6 @@ const RoomPage = () => {
       if (unsubExecution) unsubExecution();
       if (unsubPresence) unsubPresence();
       manager.disconnect();
-      socketManagerRef.current = null;
       setSocketManager(null);
       setSocketConnected(false);
     };
