@@ -235,13 +235,14 @@ export class RoomSocketManager {
     this.send('chat.send', payload);
   }
 
-  sendCursor(lineNumber, columnNumber) {
+  sendCursor(lineNumber, columnNumber, clientId = null) {
     const validUserId = (this.userInfo?.id && isValidUuid(this.userInfo.id)) ? this.userInfo.id : undefined;
 
     this.send('cursor', {
       lineNumber: lineNumber || 1,
       column: columnNumber || 1,
       columnNumber: columnNumber || 1,
+      ...(clientId ? { clientId } : {}),
       username: this.userInfo?.username,
       displayName: this.userInfo?.displayName || this.userInfo?.username || 'Peer',
       ...(validUserId ? { userId: validUserId } : {})

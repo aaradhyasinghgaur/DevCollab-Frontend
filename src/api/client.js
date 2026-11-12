@@ -118,6 +118,10 @@ export const roomApi = {
   }),
   kickParticipant: (roomId, userId) => request(`/api/rooms/${roomId}/participants/${userId}`, {
     method: 'DELETE'
+  }),
+  updateParticipantRole: (roomId, userId, role) => request(`/api/rooms/${roomId}/participants/${userId}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role })
   })
 };
 

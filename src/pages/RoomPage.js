@@ -28,6 +28,7 @@ const RoomPage = () => {
   // Code Execution
   const [isRunning, setIsRunning] = useState(false);
   const [output, setOutput] = useState(null);
+  const [outputLogs, setOutputLogs] = useState([]);
 
   // Sidebar & Layout State
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'participants' | 'output' | null
@@ -77,9 +78,43 @@ const RoomPage = () => {
     }
   }, [roomId, user]);
 
+  // Helper to normalize execution response
+  const normalizeExecution = useCallback((result) => {
+    if (!result) return null;
+    let status = result.status;
+    if (!status) {
+      if (result.exitCode === 0) status = 'SUCCESS';
+      else if (result.exitCode === 124) status = 'TIMEOUT';
+      else if (result.stderr && result.stderr.includes('error:')) status = 'COMPILATION_ERROR';
+      else status = 'ERROR';
+    }
+    return {
+      ...result,
+      id: result.id || 'log-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      status,
+      durationMs: result.durationMs ?? result.executionTimeMs ?? 0,
+      executedAt: result.executedAt || new Date().toISOString()
+    };
+  }, []);
+
+  // Load historical execution runs for this room (up to 30)
+  const loadExecutions = useCallback(async () => {
+    try {
+      const data = await executionApi.getExecutions(roomId);
+      if (Array.isArray(data) && data.length > 0) {
+        const normalized = data.slice(0, 30).map(normalizeExecution);
+        setOutputLogs(normalized);
+        setOutput(normalized[0]);
+      }
+    } catch (e) {
+      console.warn('Could not load past executions:', e);
+    }
+  }, [roomId, normalizeExecution]);
+
   useEffect(() => {
     fetchRoomDetails();
-  }, [fetchRoomDetails]);
+    loadExecutions();
+  }, [fetchRoomDetails, loadExecutions]);
 
   // Initialize WebSocket Connection
   useEffect(() => {
@@ -99,20 +134,11 @@ const RoomPage = () => {
     setSocketManager(manager);
     manager.connect();
 
-    // Helper to normalize execution response
-    const normalizeExecution = (result) => {
-      if (!result) return null;
-      const status = result.status || (result.exitCode === 0 ? 'SUCCESS' : (result.exitCode === 124 ? 'TIMEOUT' : 'ERROR'));
-      return {
-        ...result,
-        status,
-        executionTimeMs: result.durationMs ?? result.executionTimeMs
-      };
-    };
-
     // Subscribe to execution events broadcast to the room
     const unsubExecution = manager.subscribe('execution', (execResult) => {
-      setOutput(normalizeExecution(execResult));
+      const normalized = normalizeExecution(execResult);
+      setOutputLogs((prev) => [normalized, ...prev.filter((l) => l.id !== normalized.id)].slice(0, 30));
+      setOutput(normalized);
       setIsRunning(false);
       setShowOutputBottom(true);
     });
@@ -140,6 +166,28 @@ const RoomPage = () => {
       if (presenceMsg.type === 'ROOM_DELETED' || presenceMsg.status === 'ROOM_DELETED') {
         alert(presenceMsg.message || 'This room has been deleted by the owner.');
         navigate('/dashboard');
+        return;
+      }
+
+      if (presenceMsg.type === 'ROLE_UPDATED' || presenceMsg.status === 'ROLE_UPDATED') {
+        if (Array.isArray(presenceMsg.participants) && presenceMsg.participants.length > 0) {
+          const mapped = presenceMsg.participants.map((p) => {
+            if (currentUserId && String(p.userId) === String(currentUserId)) {
+              return { ...p, online: true };
+            }
+            return { ...p, online: p.online === true || p.online === 'true' };
+          });
+          setParticipants(mapped);
+        } else if (presenceMsg.userId && (presenceMsg.role || presenceMsg.roles)) {
+          const newR = presenceMsg.role || presenceMsg.roles;
+          setParticipants((prev) =>
+            prev.map((p) =>
+              String(p.userId) === String(presenceMsg.userId)
+                ? { ...p, roles: newR, role: newR }
+                : p
+            )
+          );
+        }
         return;
       }
 
@@ -236,7 +284,6 @@ const RoomPage = () => {
 
     try {
       setIsRunning(true);
-      setOutput(null);
       setShowOutputBottom(true);
 
       const result = await executionApi.execute(roomId, {
@@ -245,19 +292,19 @@ const RoomPage = () => {
         stdin: ''
       });
 
-      const status = result.status || (result.exitCode === 0 ? 'SUCCESS' : (result.exitCode === 124 ? 'TIMEOUT' : 'ERROR'));
-      setOutput({
-        ...result,
-        status,
-        executionTimeMs: result.durationMs ?? result.executionTimeMs
-      });
+      const normalized = normalizeExecution(result);
+      setOutputLogs((prev) => [normalized, ...prev.filter((l) => l.id !== normalized.id)].slice(0, 30));
+      setOutput(normalized);
     } catch (err) {
       console.error('Code execution failed:', err);
-      setOutput({
+      const errorLog = normalizeExecution({
         status: 'ERROR',
         stderr: err.message || 'Execution failed. Check backend runner configuration.',
-        exitCode: 1
+        exitCode: 1,
+        durationMs: 0
       });
+      setOutputLogs((prev) => [errorLog, ...prev].slice(0, 30));
+      setOutput(errorLog);
     } finally {
       setIsRunning(false);
     }
@@ -296,6 +343,28 @@ const RoomPage = () => {
       alert(err.message || 'Failed to kick participant');
     }
   };
+
+  // Owner updates a participant's access right (role)
+  const handleUpdateRole = async (targetUserId, newRole) => {
+    try {
+      setParticipants((prev) =>
+        prev.map((p) =>
+          String(p.userId) === String(targetUserId)
+            ? { ...p, roles: newRole, role: newRole }
+            : p
+        )
+      );
+      await roomApi.updateParticipantRole(roomId, targetUserId, newRole);
+    } catch (err) {
+      console.error('Failed to update participant role:', err);
+      alert(err.message || 'Failed to update access right');
+      fetchRoomDetails();
+    }
+  };
+
+  const currentParticipant = participants.find((p) => String(p.userId) === String(user?.id));
+  const currentUserRole = isOwner ? 'OWNER' : (currentParticipant?.roles || currentParticipant?.role || 'EDITOR');
+  const isReadOnly = String(currentUserRole).toUpperCase() === 'VIEWER';
 
   if (loading) {
     return (
@@ -354,6 +423,7 @@ const RoomPage = () => {
             isOwner={isOwner}
             currentUserId={user?.id}
             onKick={handleKickParticipant}
+            onUpdateRole={handleUpdateRole}
           />
         </div>
 
@@ -378,6 +448,8 @@ const RoomPage = () => {
                 roomId={roomId}
                 language={language}
                 fontSize={fontSize}
+                readOnly={isReadOnly}
+                participants={participants}
                 initialContent={room.content}
                 initialRevision={room.revision}
                 socketManager={socketManager}
@@ -390,8 +462,13 @@ const RoomPage = () => {
               <div className="h-[35%] w-full">
                 <RoomOutputPanel
                   output={output}
+                  logs={outputLogs}
                   isRunning={isRunning}
-                  onClear={() => setOutput(null)}
+                  onSelectLog={(log) => setOutput(log)}
+                  onClear={() => {
+                    setOutput(null);
+                    setOutputLogs([]);
+                  }}
                 />
               </div>
             )}

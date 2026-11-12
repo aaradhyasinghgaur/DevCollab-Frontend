@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import { codeApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { FiEye } from 'react-icons/fi';
 
 const LANGUAGE_MAP = {
   JAVASCRIPT: 'javascript',
@@ -14,10 +15,75 @@ const LANGUAGE_MAP = {
 const isValidUuid = (val) =>
   typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
 
+/**
+ * Clean Monaco IContentWidget for remote collaborator cursors.
+ * Renders a single caret line and floating name badge at exact {lineNumber, column}
+ * without polluting document lines or duplicating when lines are inserted.
+ */
+class RemoteCursorWidget {
+  constructor(editor, id, userId, name, color) {
+    this.editor = editor;
+    this.id = id;
+    this.userId = userId;
+    this.name = name;
+    this.color = color;
+    this.domNode = document.createElement('div');
+    this.domNode.className = 'monaco-remote-cursor-container';
+    this.domNode.style.cssText = 'pointer-events: none; z-index: 50; position: absolute;';
+
+    const safeName = String(name || 'Peer').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    this.domNode.innerHTML = `
+      <div style="position: relative; width: 0; height: 19px;">
+        <div style="position: absolute; left: 0; top: 0; width: 2px; height: 100%; background: ${color}; border-radius: 1px; box-shadow: 0 0 6px ${color}99;"></div>
+        <div style="position: absolute; left: -2px; top: -18px; background: ${color}; color: #ffffff; font-size: 10px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 1px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.5); pointer-events: none; line-height: 1.2;">
+          ${safeName}
+        </div>
+      </div>
+    `;
+
+    this.position = null;
+    this.editor.addContentWidget(this);
+  }
+
+  getId() {
+    return 'remote-cursor-' + this.id;
+  }
+
+  getDomNode() {
+    return this.domNode;
+  }
+
+  getPosition() {
+    return this.position;
+  }
+
+  updatePosition(lineNumber, column) {
+    this.position = {
+      position: { lineNumber, column },
+      preference: [0] // monaco.editor.ContentWidgetPositionPreference.EXACT
+    };
+    try {
+      this.editor.layoutContentWidget(this);
+    } catch (e) {}
+  }
+
+  destroy() {
+    try {
+      this.editor.removeContentWidget(this);
+    } catch (e) {}
+    if (this.domNode && this.domNode.parentNode) {
+      this.domNode.parentNode.removeChild(this.domNode);
+    }
+  }
+}
+
 const RoomEditor = ({
   roomId,
   language = 'JAVASCRIPT',
   fontSize = 14,
+  readOnly = false,
+  participants = [],
   initialContent = '',
   initialRevision = 0,
   socketManager,
@@ -42,8 +108,8 @@ const RoomEditor = ({
   // Debounced full sync timer reference
   const fullSyncTimerRef = useRef(null);
 
-  // Peer cursor decorations storage: Map<userId, decorationIds[]>
-  const peerDecorationsRef = useRef(new Map());
+  // Monaco Content Widgets storage: Map<clientKey, { widget: RemoteCursorWidget, timer: any }>
+  const peerWidgetsRef = useRef(new Map());
 
   // Monaco event listener disposables
   const listenerDisposablesRef = useRef([]);
@@ -75,6 +141,39 @@ const RoomEditor = ({
     loadInitialCode();
   }, [loadInitialCode]);
 
+  // Purge any remote cursor widgets whose owner is offline
+  useEffect(() => {
+    if (!participants) return;
+
+    const activeUserIds = new Set();
+    const activeNames = new Set();
+
+    participants.forEach((p) => {
+      const isOnline = p.online === true || p.online === 'true';
+      if (isOnline) {
+        if (p.userId) activeUserIds.add(String(p.userId));
+        const name = p.displayName || p.userName || p.username;
+        if (name) activeNames.add(name.toLowerCase());
+      }
+    });
+
+    peerWidgetsRef.current.forEach((peerData, key) => {
+      const { widget } = peerData;
+      const wUserId = widget.userId ? String(widget.userId) : null;
+      const wName = widget.name ? String(widget.name).toLowerCase() : null;
+
+      // Check if this widget's owner is still active
+      const isStillActive = (wUserId && activeUserIds.has(wUserId)) ||
+                            (wName && activeNames.has(wName));
+
+      if (!isStillActive) {
+        if (peerData.timer) clearTimeout(peerData.timer);
+        widget.destroy();
+        peerWidgetsRef.current.delete(key);
+      }
+    });
+  }, [participants]);
+
   // Expose current code retrieval helper
   useEffect(() => {
     if (onCodeChangeRef) {
@@ -97,7 +196,7 @@ const RoomEditor = ({
       if (isRemoteChange.current) return;
       const socket = socketManagerRef.current;
       if (socket && (socket.connected || socket.client?.connected)) {
-        socket.sendCursor(e.position.lineNumber, e.position.column);
+        socket.sendCursor(e.position.lineNumber, e.position.column, clientIdRef.current);
       }
     });
     listenerDisposablesRef.current.push(cursorDisp);
@@ -170,8 +269,12 @@ const RoomEditor = ({
     listenerDisposablesRef.current.push(contentDisp);
   };
 
-  // Clean up listeners and timers on component unmount
+  // Clean up listeners, widgets, and legacy styles on component unmount
   useEffect(() => {
+    // Purge any lingering legacy style tags from earlier sessions
+    const legacyStyles = document.querySelectorAll('style[id^="peer-cursor-style-"]');
+    legacyStyles.forEach((s) => s.remove());
+
     return () => {
       if (fullSyncTimerRef.current) {
         clearTimeout(fullSyncTimerRef.current);
@@ -180,6 +283,12 @@ const RoomEditor = ({
         try { d.dispose(); } catch (e) {}
       });
       listenerDisposablesRef.current = [];
+
+      peerWidgetsRef.current.forEach(({ widget, timer }) => {
+        if (timer) clearTimeout(timer);
+        if (widget) widget.destroy();
+      });
+      peerWidgetsRef.current.clear();
     };
   }, []);
 
@@ -203,7 +312,7 @@ const RoomEditor = ({
     setupEditorListeners(editor);
   };
 
-  // Subscribe to real-time code edits & remote cursors via WebSocket
+  // Subscribe to real-time code edits, remote cursors, and presence via WebSocket
   useEffect(() => {
     if (!socketManager) return;
 
@@ -327,70 +436,84 @@ const RoomEditor = ({
 
     // 2. Subscribe to Remote Cursors
     const unsubscribeCursor = socketManager.subscribe('cursor', (cursorMsg) => {
-      if (!editorRef.current || !monacoRef.current || !cursorMsg) return;
+      if (!editorRef.current || !cursorMsg) return;
 
-      const remoteUserId = cursorMsg.userId;
-      const currentUserId = userRef.current?.id;
-      if (remoteUserId && currentUserId && String(remoteUserId) === String(currentUserId)) return;
-
-      const editor = editorRef.current;
-      const monaco = monacoRef.current;
-
-      const userIdKey = remoteUserId || 'anonymous-peer';
-      const line = cursorMsg.lineNumber || 1;
-      const col = cursorMsg.column || cursorMsg.columnNumber || 1;
-      const userName = cursorMsg.displayName || cursorMsg.userName || cursorMsg.username || 'Peer';
-      const color = cursorMsg.color || '#a855f7';
-
-      // Dynamically add peer cursor CSS rule for this user color if not present
-      const styleId = `peer-cursor-style-${userIdKey}`;
-      if (!document.getElementById(styleId)) {
-        const style = document.createElement('style');
-        style.id = styleId;
-        style.innerHTML = `
-          .peer-cursor-${userIdKey} {
-            border-left: 2px solid ${color} !important;
-            position: relative;
-            z-index: 10;
-          }
-          .peer-cursor-${userIdKey}::before {
-            content: '${userName.replace(/'/g, "\\'")}';
-            position: absolute;
-            top: -18px;
-            left: -2px;
-            font-size: 10px;
-            font-weight: 600;
-            padding: 1px 6px;
-            border-radius: 4px;
-            background-color: ${color};
-            color: #ffffff;
-            white-space: nowrap;
-            pointer-events: none;
-            z-index: 20;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-          }
-        `;
-        document.head.appendChild(style);
+      // Filter out echo from this exact client tab
+      if (cursorMsg.clientId && cursorMsg.clientId === clientIdRef.current) {
+        return;
       }
 
-      const oldDecorations = peerDecorationsRef.current.get(userIdKey) || [];
+      // If clientId is missing, fall back to comparing user IDs
+      const remoteUserId = cursorMsg.userId;
+      const currentUserId = userRef.current?.id;
+      if (!cursorMsg.clientId && remoteUserId && currentUserId && String(remoteUserId) === String(currentUserId)) {
+        return;
+      }
 
-      const newDecorations = editor.deltaDecorations(oldDecorations, [
-        {
-          range: new monaco.Range(line, col, line, col),
-          options: {
-            className: `peer-cursor-${userIdKey}`,
-            hoverMessage: { value: `**${userName}** is editing here` }
-          }
+      const editor = editorRef.current;
+      const clientKey = cursorMsg.clientId || (remoteUserId ? String(remoteUserId) : 'peer-' + (cursorMsg.username || 'anon'));
+      const line = Math.max(1, cursorMsg.lineNumber || 1);
+      const col = Math.max(1, cursorMsg.column || cursorMsg.columnNumber || 1);
+      const userName = cursorMsg.displayName || cursorMsg.userName || cursorMsg.username || 'Collaborator';
+      const color = cursorMsg.color || '#a855f7';
+
+      let peerData = peerWidgetsRef.current.get(clientKey);
+
+      if (!peerData) {
+        const widget = new RemoteCursorWidget(editor, clientKey, remoteUserId, userName, color);
+        peerData = { widget, timer: null };
+        peerWidgetsRef.current.set(clientKey, peerData);
+      }
+
+      peerData.widget.updatePosition(line, col);
+
+      // Auto-hide inactive remote cursor after 20 seconds of no movement
+      if (peerData.timer) {
+        clearTimeout(peerData.timer);
+      }
+      peerData.timer = setTimeout(() => {
+        const existing = peerWidgetsRef.current.get(clientKey);
+        if (existing) {
+          existing.widget.destroy();
+          peerWidgetsRef.current.delete(clientKey);
         }
-      ]);
+      }, 20000);
+    });
 
-      peerDecorationsRef.current.set(userIdKey, newDecorations);
+    // 3. Immediately remove cursor widget when user leaves or goes offline
+    const unsubscribePresence = socketManager.subscribe('presence', (presenceMsg) => {
+      if (!presenceMsg) return;
+      const isLeave = presenceMsg.type === 'LEAVE' ||
+                      presenceMsg.status === 'LEAVE' ||
+                      presenceMsg.type === 'OFFLINE' ||
+                      presenceMsg.status === 'OFFLINE' ||
+                      presenceMsg.type === 'KICKED' ||
+                      presenceMsg.status === 'KICKED';
+
+      if (isLeave) {
+        const targetId = presenceMsg.userId ? String(presenceMsg.userId) : null;
+        const targetName = (presenceMsg.username || presenceMsg.displayName) ? String(presenceMsg.username || presenceMsg.displayName).toLowerCase() : null;
+
+        peerWidgetsRef.current.forEach((peerData, key) => {
+          const wId = peerData.widget?.userId ? String(peerData.widget.userId) : null;
+          const wName = peerData.widget?.name ? String(peerData.widget.name).toLowerCase() : null;
+
+          const matchesId = targetId && (wId === targetId || key.includes(targetId));
+          const matchesName = targetName && (wName === targetName || key.toLowerCase().includes(targetName));
+
+          if (matchesId || matchesName) {
+            if (peerData.timer) clearTimeout(peerData.timer);
+            peerData.widget.destroy();
+            peerWidgetsRef.current.delete(key);
+          }
+        });
+      }
     });
 
     return () => {
       if (unsubscribeCode) unsubscribeCode();
       if (unsubscribeCursor) unsubscribeCursor();
+      if (unsubscribePresence) unsubscribePresence();
     };
   }, [socketManager]);
 
@@ -407,6 +530,13 @@ const RoomEditor = ({
         </div>
       )}
 
+      {readOnly && (
+        <div className="absolute top-3 right-5 z-20 flex items-center gap-1.5 rounded-full border border-blue-500/30 bg-blue-950/80 px-3 py-1 text-xs font-semibold text-blue-300 shadow-lg backdrop-blur-md">
+          <FiEye className="text-sm" />
+          <span>View-Only Mode</span>
+        </div>
+      )}
+
       <Editor
         height="100%"
         width="100%"
@@ -414,6 +544,8 @@ const RoomEditor = ({
         theme="vs-dark"
         options={{
           fontSize,
+          readOnly: Boolean(readOnly),
+          domReadOnly: Boolean(readOnly),
           fontFamily: "'Fira Code', 'Cascadia Code', Consolas, monospace",
           minimap: { enabled: true },
           scrollBeyondLastLine: false,
