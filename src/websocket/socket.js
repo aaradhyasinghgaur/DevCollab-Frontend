@@ -21,6 +21,7 @@ export class RoomSocketManager {
     this.client = null;
     this.subscriptions = new Map(); // topic -> stompSubscription
     this.subCallbacks = new Map(); // topic -> callback function
+    this.outgoingQueue = []; // Queue outgoing messages if sent before socket is connected
     this.onConnectCallback = onConnectCallback;
     this.onDisconnectCallback = onDisconnectCallback;
     this.connected = false;
@@ -62,6 +63,9 @@ export class RoomSocketManager {
           this._createStompSubscription(topic, cb);
         });
 
+        // Flush any messages that were queued while connecting
+        this._flushOutgoingQueue();
+
         // Send initial presence ping
         this.sendPresence('ACTIVE');
       },
@@ -90,6 +94,16 @@ export class RoomSocketManager {
     });
 
     this.client.activate();
+  }
+
+  _flushOutgoingQueue() {
+    if (!this.outgoingQueue || this.outgoingQueue.length === 0) return;
+    const queued = [...this.outgoingQueue];
+    this.outgoingQueue = [];
+    console.log(`[DevCollab] Flushing ${queued.length} queued messages after connect`);
+    queued.forEach(({ destination, body }) => {
+      this.send(destination, body);
+    });
   }
 
   _createStompSubscription(topic, callback) {
@@ -146,7 +160,10 @@ export class RoomSocketManager {
         console.error(`[DevCollab] Failed to publish to ${destination}:`, err);
       }
     } else {
-      console.warn(`[DevCollab] WebSocket: cannot send to ${destination}, socket not connected`);
+      // Buffer messages sent while socket is connecting/reconnecting
+      if (this.outgoingQueue.length < 200) {
+        this.outgoingQueue.push({ destination, body });
+      }
     }
   }
 
@@ -211,6 +228,7 @@ export class RoomSocketManager {
   }
 
   disconnect() {
+    this.outgoingQueue = [];
     this.subscriptions.forEach((sub) => {
       try {
         if (sub) sub.unsubscribe();

@@ -107,10 +107,7 @@ const RoomEditor = ({
       if (isRemoteChange.current) return;
 
       const socket = socketManagerRef.current;
-      if (!socket || (!socket.connected && !socket.client?.connected)) {
-        console.warn('[DevCollab] WebSocket not connected, edit not broadcasted');
-        return;
-      }
+      if (!socket) return;
 
       const model = editor.getModel();
       if (!model) return;

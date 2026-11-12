@@ -12,6 +12,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef(null);
+  const localQueueRef = useRef([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -38,6 +39,17 @@ const ChatPanel = ({ roomId, socketManager }) => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Flush any locally buffered messages once socketManager is initialized
+  useEffect(() => {
+    if (socketManager && localQueueRef.current.length > 0) {
+      const items = [...localQueueRef.current];
+      localQueueRef.current = [];
+      items.forEach(({ content, extra }) => {
+        socketManager.sendChatMessage(content, 'CHAT', extra);
+      });
+    }
+  }, [socketManager]);
 
   // Subscribe to real-time chat messages
   useEffect(() => {
@@ -90,12 +102,6 @@ const ChatPanel = ({ roomId, socketManager }) => {
     const trimmed = inputText.trim();
     if (!trimmed) return;
 
-    const isConnected = socketManager && (socketManager.connected || socketManager.client?.connected);
-    if (!isConnected) {
-      alert('Chat is currently connecting to the room. Please wait a moment and try again.');
-      return;
-    }
-
     // Optimistic message update for instant UI feedback
     const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7);
     const validUserId = isValidUuid(user?.id) ? user.id : undefined;
@@ -113,12 +119,19 @@ const ChatPanel = ({ roomId, socketManager }) => {
     setMessages((prev) => [...prev, optimisticMsg]);
     setInputText('');
 
-    socketManager.sendChatMessage(trimmed, 'CHAT', {
+    const payloadExtra = {
       senderId: validUserId,
       senderName: user?.username || user?.email,
       username: user?.username || user?.email,
       displayName: user?.displayName || user?.username || 'Collaborator'
-    });
+    };
+
+    // Send immediately or queue in socketManager buffer until connected
+    if (socketManager) {
+      socketManager.sendChatMessage(trimmed, 'CHAT', payloadExtra);
+    } else {
+      localQueueRef.current.push({ content: trimmed, extra: payloadExtra });
+    }
   };
 
   return (
@@ -227,11 +240,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
         <div className="flex items-center gap-2 rounded-xl border border-gray-800 bg-slate-900 px-3 py-1.5 focus-within:border-purple-500">
           <input
             type="text"
-            placeholder={
-              socketManager && (socketManager.connected || socketManager.client?.connected)
-                ? 'Type a message...'
-                : 'Connecting to chat...'
-            }
+            placeholder="Type a message..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             className="flex-1 bg-transparent text-xs text-white placeholder-gray-500 outline-none"
