@@ -2,14 +2,24 @@ import { Client } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { getAuthToken, API_BASE_URL } from '../api/client';
 
-const WS_URL = process.env.REACT_APP_WS_URL || `${API_BASE_URL.replace(/\/$/, '')}/ws`;
+const getWsUrl = () => {
+  const rawWs = process.env.REACT_APP_WS_URL;
+  if (rawWs && rawWs.trim()) {
+    // SockJS requires http/https URL scheme, convert ws/wss if provided
+    return rawWs.trim().replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+  }
+  return `${API_BASE_URL.replace(/\/+$/, '')}/ws`;
+};
+
+const WS_URL = getWsUrl();
 
 export class RoomSocketManager {
   constructor(roomId, onConnectCallback, userInfo = null) {
     this.roomId = roomId;
     this.userInfo = userInfo;
     this.client = null;
-    this.subscriptions = new Map();
+    this.subscriptions = new Map(); // topic -> stompSubscription
+    this.subCallbacks = new Map(); // topic -> callback function
     this.onConnectCallback = onConnectCallback;
     this.connected = false;
   }
@@ -36,6 +46,12 @@ export class RoomSocketManager {
         if (this.onConnectCallback) {
           this.onConnectCallback(frame);
         }
+
+        // Resubscribe any registered topics upon connection or reconnection
+        this.subCallbacks.forEach((cb, topic) => {
+          this._createStompSubscription(topic, cb);
+        });
+
         // Send initial presence ping
         this.sendPresence('ACTIVE');
       },
@@ -53,13 +69,14 @@ export class RoomSocketManager {
     this.client.activate();
   }
 
-  subscribe(topic, callback) {
-    if (!this.client) return null;
-
+  _createStompSubscription(topic, callback) {
+    if (!this.client || !this.client.connected) return null;
     const fullTopic = `/topic/room/${this.roomId}/${topic}`;
-
-    const doSubscribe = () => {
-      if (!this.client || !this.client.connected) return null;
+    try {
+      const existing = this.subscriptions.get(topic);
+      if (existing) {
+        try { existing.unsubscribe(); } catch (e) {}
+      }
       const sub = this.client.subscribe(fullTopic, (message) => {
         try {
           const payload = JSON.parse(message.body);
@@ -68,43 +85,43 @@ export class RoomSocketManager {
           callback(message.body);
         }
       });
-      return sub;
-    };
-
-    if (this.connected) {
-      const sub = doSubscribe();
       this.subscriptions.set(topic, sub);
-      return () => {
-        if (sub) sub.unsubscribe();
-        this.subscriptions.delete(topic);
-      };
-    } else {
-      // Defer until connected
-      const checkInterval = setInterval(() => {
-        if (this.connected) {
-          clearInterval(checkInterval);
-          const sub = doSubscribe();
-          this.subscriptions.set(topic, sub);
-        }
-      }, 200);
-
-      return () => {
-        clearInterval(checkInterval);
-        const sub = this.subscriptions.get(topic);
-        if (sub) {
-          sub.unsubscribe();
-          this.subscriptions.delete(topic);
-        }
-      };
+      return sub;
+    } catch (err) {
+      console.warn(`Failed to subscribe to ${fullTopic}:`, err);
+      return null;
     }
   }
 
+  subscribe(topic, callback) {
+    this.subCallbacks.set(topic, callback);
+
+    if (this.connected) {
+      this._createStompSubscription(topic, callback);
+    }
+
+    return () => {
+      this.subCallbacks.delete(topic);
+      const sub = this.subscriptions.get(topic);
+      if (sub) {
+        try { sub.unsubscribe(); } catch (e) {}
+        this.subscriptions.delete(topic);
+      }
+    };
+  }
+
   send(destination, body) {
-    if (this.client && this.connected) {
-      this.client.publish({
-        destination: `/app/room/${this.roomId}/${destination}`,
-        body: JSON.stringify(body)
-      });
+    if (this.client && (this.connected || this.client.connected)) {
+      try {
+        this.client.publish({
+          destination: `/app/room/${this.roomId}/${destination}`,
+          body: JSON.stringify(body)
+        });
+      } catch (err) {
+        console.error(`Failed to publish to /app/room/${this.roomId}/${destination}:`, err);
+      }
+    } else {
+      console.warn(`DevCollab WebSocket: cannot send to ${destination}, socket not connected`);
     }
   }
 
@@ -124,9 +141,9 @@ export class RoomSocketManager {
     this.send('presence', {
       status,
       timestamp: Date.now(),
-      userId: this.userInfo?.id || extra.userId,
+      userId: this.userInfo?.id ? String(this.userInfo.id) : (extra.userId ? String(extra.userId) : undefined),
       username: this.userInfo?.username || extra.username,
-      displayName: this.userInfo?.displayName || extra.displayName,
+      displayName: this.userInfo?.displayName || this.userInfo?.username || extra.displayName,
       ...extra
     });
   }

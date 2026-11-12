@@ -31,9 +31,9 @@ const AVATAR_COLORS = [
 const ParticipantCard = ({ participant, isOwner = false, currentUserId = null, onKick }) => {
   if (!participant) return null;
 
-  const name = participant.userName || participant.displayName || 'Collaborator';
+  const name = participant.displayName || participant.userName || participant.username || 'Collaborator';
   const initial = name.charAt(0).toUpperCase();
-  const role = participant.role || 'EDITOR';
+  const role = participant.roles || participant.role || 'EDITOR';
   const roleStyle = ROLE_STYLES[role] || ROLE_STYLES.EDITOR;
   const RoleIcon = roleStyle.icon;
 

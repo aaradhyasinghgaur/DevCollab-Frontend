@@ -72,11 +72,11 @@ const Dashboard = () => {
   }, [rooms, searchQuery]);
 
   const myRooms = useMemo(() => {
-    return filteredRooms.filter((r) => r.ownerId === user?.id);
+    return filteredRooms.filter((r) => user?.id && String(r.ownerId) === String(user.id));
   }, [filteredRooms, user?.id]);
 
   const joinedRooms = useMemo(() => {
-    return filteredRooms.filter((r) => r.ownerId !== user?.id);
+    return filteredRooms.filter((r) => !user?.id || String(r.ownerId) !== String(user.id));
   }, [filteredRooms, user?.id]);
 
   // Handle Create Room
@@ -226,7 +226,7 @@ const Dashboard = () => {
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
                   {myRooms.map((room) => (
                     <RoomCard
-                      key={room.id}
+                      key={room.roomId || room.id}
                       room={room}
                       currentUserId={user?.id}
                       onDelete={handleDeleteRoom}
@@ -262,7 +262,7 @@ const Dashboard = () => {
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
                   {joinedRooms.map((room) => (
                     <RoomCard
-                      key={room.id}
+                      key={room.roomId || room.id}
                       room={room}
                       currentUserId={user?.id}
                     />

@@ -20,7 +20,7 @@ const RoomNavbar = ({ room, socketManager }) => {
   const [copied, setCopied] = useState(false);
   const [leaving, setLeaving] = useState(false);
 
-  const isOwner = Boolean(user?.id && room?.ownerId && user.id === room.ownerId);
+  const isOwner = Boolean(user?.id && room?.ownerId && String(user.id) === String(room.ownerId));
 
   const langStyle = (room && LANGUAGE_STYLES[room.language]) || {
     label: room?.language || 'JavaScript',
@@ -37,14 +37,16 @@ const RoomNavbar = ({ room, socketManager }) => {
   };
 
   const handleDeleteRoom = async () => {
-    if (!room?.id) return;
-    if (window.confirm(`Are you sure you want to delete "${room.name || 'this room'}"? This action cannot be undone and all participants will be disconnected.`)) {
+    const targetRoomId = room?.roomId || room?.id;
+    if (!targetRoomId) return;
+    const targetRoomName = room?.roomName || room?.name || 'this room';
+    if (window.confirm(`Are you sure you want to delete "${targetRoomName}"? This action cannot be undone and all participants will be disconnected.`)) {
       try {
         setLeaving(true);
         if (socketManager) {
           socketManager.leave();
         }
-        await roomApi.delete(room.id);
+        await roomApi.delete(targetRoomId);
       } catch (e) {
         console.warn('Delete room error:', e);
       } finally {
@@ -54,14 +56,15 @@ const RoomNavbar = ({ room, socketManager }) => {
   };
 
   const handleLeaveRoom = async () => {
-    if (!room?.id) return;
+    const targetRoomId = room?.roomId || room?.id;
+    if (!targetRoomId) return;
     if (window.confirm('Are you sure you want to leave this room? You can return from your dashboard at any time.')) {
       try {
         setLeaving(true);
         if (socketManager) {
           socketManager.leave();
         }
-        await roomApi.leave(room.id);
+        await roomApi.leave(targetRoomId);
       } catch (e) {
         console.warn('Leave room error (proceeding to dashboard):', e);
       } finally {
@@ -88,7 +91,7 @@ const RoomNavbar = ({ room, socketManager }) => {
 
         <div className="flex items-center gap-2">
           <h1 className="text-base font-bold text-gray-100 max-w-xs sm:max-w-md truncate">
-            {room?.name || 'Collaborative Coding Room'}
+            {room?.roomName || room?.name || 'Collaborative Coding Room'}
           </h1>
         </div>
       </div>

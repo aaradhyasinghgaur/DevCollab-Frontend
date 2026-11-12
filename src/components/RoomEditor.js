@@ -11,6 +11,9 @@ const LANGUAGE_MAP = {
   C: 'c'
 };
 
+const isValidUuid = (val) =>
+  typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
 const RoomEditor = ({
   roomId,
   language = 'JAVASCRIPT',
@@ -24,6 +27,13 @@ const RoomEditor = ({
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
 
+  // Keep live references to socketManager and user to prevent stale closures
+  const socketManagerRef = useRef(socketManager);
+  socketManagerRef.current = socketManager;
+
+  const userRef = useRef(user);
+  userRef.current = user;
+
   const [initialLoading, setInitialLoading] = useState(!initialContent);
   const currentRevision = useRef(initialRevision || 0);
   const isRemoteChange = useRef(false);
@@ -31,6 +41,9 @@ const RoomEditor = ({
 
   // Peer cursor decorations storage: Map<userId, decorationIds[]>
   const peerDecorationsRef = useRef(new Map());
+
+  // Monaco event listener disposables
+  const listenerDisposablesRef = useRef([]);
 
   // Load initial code snapshot from REST API
   const loadInitialCode = useCallback(async () => {
@@ -68,43 +81,44 @@ const RoomEditor = ({
     }
   }, [onCodeChangeRef]);
 
-  // Handle Monaco Editor Mount
-  const handleEditorDidMount = (editor, monaco) => {
-    editorRef.current = editor;
-    monacoRef.current = monaco;
+  // Attach Monaco listeners that read live socketManager & user refs
+  const setupEditorListeners = (editor) => {
+    // Dispose previous listeners if any
+    listenerDisposablesRef.current.forEach((d) => {
+      try { d.dispose(); } catch (e) {}
+    });
+    listenerDisposablesRef.current = [];
 
-    // Apply initialContent if provided
-    if (initialContent) {
-      isRemoteChange.current = true;
-      editor.setValue(initialContent);
-      isRemoteChange.current = false;
-      setInitialLoading(false);
-    }
-
-    // Refresh with latest from backend
-    loadInitialCode();
-
-    // Listen to local cursor movements and publish (ignore movements during remote edit application)
-    editor.onDidChangeCursorPosition((e) => {
+    // 1. Listen to local cursor movements and publish
+    const cursorDisp = editor.onDidChangeCursorPosition((e) => {
       if (isRemoteChange.current) return;
-      if (socketManager && socketManager.connected) {
-        socketManager.sendCursor(e.position.lineNumber, e.position.column);
+      const socket = socketManagerRef.current;
+      if (socket && (socket.connected || socket.client?.connected)) {
+        socket.sendCursor(e.position.lineNumber, e.position.column);
       }
     });
+    listenerDisposablesRef.current.push(cursorDisp);
 
-    // Listen to local typing changes and publish deltas
-    editor.onDidChangeModelContent((event) => {
+    // 2. Listen to local typing changes and publish deltas
+    const contentDisp = editor.onDidChangeModelContent((event) => {
       if (isRemoteChange.current) return;
-      if (!socketManager || !socketManager.connected) return;
+
+      const socket = socketManagerRef.current;
+      if (!socket || (!socket.connected && !socket.client?.connected)) {
+        console.warn('DevCollab: WebSocket not connected, edit not broadcasted');
+        return;
+      }
 
       const model = editor.getModel();
       if (!model) return;
 
       const fullContent = model.getValue();
+      const currentUser = userRef.current;
+      const validUserId = isValidUuid(currentUser?.id) ? currentUser.id : undefined;
 
       event.changes.forEach((change) => {
         const isDelete = change.rangeLength > 0;
-        const isInsert = change.text && change.text.length > 0;
+        const isInsert = Boolean(change.text && change.text.length > 0);
 
         let type = null;
         if (isDelete && isInsert) {
@@ -116,9 +130,9 @@ const RoomEditor = ({
         }
 
         if (type) {
-          socketManager.sendCodeEdit({
+          socket.sendCodeEdit({
             clientId: clientIdRef.current,
-            userId: user?.id,
+            userId: validUserId,
             type,
             position: change.rangeOffset,
             text: change.text || '',
@@ -135,6 +149,37 @@ const RoomEditor = ({
         }
       });
     });
+    listenerDisposablesRef.current.push(contentDisp);
+  };
+
+  // Clean up listeners on component unmount
+  useEffect(() => {
+    return () => {
+      listenerDisposablesRef.current.forEach((d) => {
+        try { d.dispose(); } catch (e) {}
+      });
+      listenerDisposablesRef.current = [];
+    };
+  }, []);
+
+  // Handle Monaco Editor Mount
+  const handleEditorDidMount = (editor, monaco) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+
+    // Apply initialContent if provided
+    if (initialContent) {
+      isRemoteChange.current = true;
+      editor.setValue(initialContent);
+      isRemoteChange.current = false;
+      setInitialLoading(false);
+    }
+
+    // Refresh with latest from backend
+    loadInitialCode();
+
+    // Register active listeners
+    setupEditorListeners(editor);
   };
 
   // Subscribe to real-time code edits & remote cursors via WebSocket
@@ -155,7 +200,8 @@ const RoomEditor = ({
 
       // 2. Skip echo if senderUserId matches current user (fallback when clientId absent)
       const senderUserId = msg.userId || msg.senderId;
-      if (!msg.clientId && senderUserId && senderUserId === user?.id) {
+      const currentUserId = userRef.current?.id;
+      if (!msg.clientId && senderUserId && currentUserId && String(senderUserId) === String(currentUserId)) {
         if (typeof msg.revision === 'number') {
           currentRevision.current = msg.revision;
         }
@@ -180,14 +226,7 @@ const RoomEditor = ({
         let rangeToApply = null;
         let textToApply = msg.text || '';
 
-        if (msg.range) {
-          rangeToApply = new monaco.Range(
-            msg.range.startLineNumber,
-            msg.range.startColumn,
-            msg.range.endLineNumber,
-            msg.range.endColumn
-          );
-        } else if (typeof msg.position === 'number') {
+        if (typeof msg.position === 'number') {
           const startPos = model.getPositionAt(msg.position);
           const length = msg.length || 0;
           const endPos = length > 0 ? model.getPositionAt(msg.position + length) : startPos;
@@ -196,6 +235,13 @@ const RoomEditor = ({
             startPos.column,
             endPos.lineNumber,
             endPos.column
+          );
+        } else if (msg.range) {
+          rangeToApply = new monaco.Range(
+            msg.range.startLineNumber,
+            msg.range.startColumn,
+            msg.range.endLineNumber,
+            msg.range.endColumn
           );
         }
 
@@ -236,16 +282,22 @@ const RoomEditor = ({
 
             editor.setPosition({ lineNumber: newLn, column: newCol });
           }
-        } else if (msg.fullContent != null) {
-          // Direct fallback if full content provided and types mismatch
-          if (editor.getValue() !== msg.fullContent) {
-            editor.setValue(msg.fullContent);
+        }
+
+        // Reconcile with msg.fullContent if provided and content diverged from server truth
+        if (msg.fullContent != null && editor.getValue() !== msg.fullContent) {
+          const posBeforeSync = editor.getPosition();
+          editor.setValue(msg.fullContent);
+          if (posBeforeSync) {
+            editor.setPosition(posBeforeSync);
           }
         }
       } catch (err) {
         console.error('Error applying remote OT edit:', err);
         if (msg.fullContent != null && editor.getValue() !== msg.fullContent) {
+          const pos = editor.getPosition();
           editor.setValue(msg.fullContent);
+          if (pos) editor.setPosition(pos);
         }
       } finally {
         isRemoteChange.current = false;
@@ -260,7 +312,8 @@ const RoomEditor = ({
       if (!cursorMsg) return;
 
       const remoteUserId = cursorMsg.userId;
-      if (remoteUserId && remoteUserId === user?.id) return; // Skip own cursor
+      const currentUserId = userRef.current?.id;
+      if (remoteUserId && currentUserId && String(remoteUserId) === String(currentUserId)) return; // Skip own cursor
 
       const editor = editorRef.current;
       const monaco = monacoRef.current;
@@ -321,7 +374,7 @@ const RoomEditor = ({
       if (unsubscribeCode) unsubscribeCode();
       if (unsubscribeCursor) unsubscribeCursor();
     };
-  }, [socketManager, user?.id]);
+  }, [socketManager]);
 
   const monacoLanguage = LANGUAGE_MAP[language] || 'javascript';
 

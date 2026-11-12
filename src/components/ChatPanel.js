@@ -43,7 +43,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
     const unsubscribe = socketManager.subscribe('chat', (newMsg) => {
       if (!newMsg) return;
       setMessages((prev) => {
-        if (newMsg.id && prev.some((m) => m.id === newMsg.id)) {
+        if (newMsg.id && prev.some((m) => String(m.id) === String(newMsg.id))) {
           return prev;
         }
         return [...prev, newMsg];
@@ -92,7 +92,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
           </div>
         ) : (
           messages.map((msg, index) => {
-            const isMe = msg.senderId === user?.id ||
+            const isMe = (user?.id && msg.senderId && String(msg.senderId) === String(user.id)) ||
                          (user?.username && msg.senderName === user.username) ||
                          (user?.displayName && msg.senderName === user.displayName);
             const isSystem = msg.type === 'JOIN' || msg.type === 'LEAVE';
@@ -108,8 +108,9 @@ const ChatPanel = ({ roomId, socketManager }) => {
             }
 
             const senderInitial = (msg.senderName || 'U').charAt(0).toUpperCase();
-            const timeStr = msg.timestamp
-              ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            const timeRaw = msg.createdAt || msg.timestamp;
+            const timeStr = timeRaw
+              ? new Date(timeRaw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               : '';
 
             return (

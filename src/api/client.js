@@ -46,7 +46,16 @@ async function request(path, options = {}) {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const message = (data && (data.message || data.error)) || `Request failed with status ${response.status}`;
+    let message = `Request failed with status ${response.status}`;
+    if (data) {
+      if (Array.isArray(data.errors) && data.errors.length > 0) {
+        message = data.errors.map((e) => e.defaultMessage || e.message || JSON.stringify(e)).join(', ');
+      } else if (data.message) {
+        message = data.message;
+      } else if (data.error) {
+        message = data.error;
+      }
+    }
     const error = new Error(message);
     error.status = response.status;
     error.data = data;
@@ -61,10 +70,18 @@ export const authApi = {
     method: 'POST',
     body: JSON.stringify(credentials)
   }),
-  register: (userData) => request('/api/v1/auth/register', {
-    method: 'POST',
-    body: JSON.stringify(userData)
-  }),
+  register: (userData) => {
+    // Backend RegisterRequest DTO matches username, email, password
+    const payload = {
+      username: userData.username?.trim(),
+      email: userData.email?.trim(),
+      password: userData.password
+    };
+    return request('/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
   getMe: () => request('/api/v1/users/me', {
     method: 'GET'
   })
@@ -119,6 +136,9 @@ export const executionApi = {
   execute: (roomId, payload) => request(`/api/rooms/${roomId}/execute`, {
     method: 'POST',
     body: JSON.stringify(payload)
+  }),
+  getExecutions: (roomId) => request(`/api/rooms/${roomId}/executions`, {
+    method: 'GET'
   })
 };
 

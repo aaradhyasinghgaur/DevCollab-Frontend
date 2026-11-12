@@ -33,9 +33,10 @@ const RoomPage = () => {
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'participants' | 'output' | null
   const [showOutputBottom, setShowOutputBottom] = useState(true);
 
-  // Socket Manager reference
-  const socketManagerRef = useRef(null);
+  // Socket Manager state & reference
+  const [socketManager, setSocketManager] = useState(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const socketManagerRef = useRef(null);
 
   // Ref to extract latest code from RoomEditor
   const getCodeRef = useRef(null);
@@ -46,7 +47,14 @@ const RoomPage = () => {
       setLoading(true);
       setError(null);
       const data = await roomApi.getById(roomId);
-      setRoom(data);
+      const normalizedRoom = data ? {
+        ...data,
+        id: data.roomId || data.id,
+        roomId: data.roomId || data.id,
+        name: data.roomName || data.name,
+        roomName: data.roomName || data.name
+      } : null;
+      setRoom(normalizedRoom);
       const initialParticipants = (data?.participants || []).map((p) => {
         if (user && String(p.userId) === String(user.id)) {
           return { ...p, online: true };
@@ -82,11 +90,23 @@ const RoomPage = () => {
     );
 
     socketManagerRef.current = manager;
+    setSocketManager(manager);
     manager.connect();
+
+    // Helper to normalize execution response
+    const normalizeExecution = (result) => {
+      if (!result) return null;
+      const status = result.status || (result.exitCode === 0 ? 'SUCCESS' : (result.exitCode === 124 ? 'TIMEOUT' : 'ERROR'));
+      return {
+        ...result,
+        status,
+        executionTimeMs: result.durationMs ?? result.executionTimeMs
+      };
+    };
 
     // Subscribe to execution events broadcast to the room
     const unsubExecution = manager.subscribe('execution', (execResult) => {
-      setOutput(execResult);
+      setOutput(normalizeExecution(execResult));
       setIsRunning(false);
       setShowOutputBottom(true);
     });
@@ -154,9 +174,17 @@ const RoomPage = () => {
       if (unsubPresence) unsubPresence();
       manager.disconnect();
       socketManagerRef.current = null;
+      setSocketManager(null);
       setSocketConnected(false);
     };
-  }, [roomId, navigate, user]);
+  }, [roomId, navigate]);
+
+  // Keep socketManager updated with latest authenticated user without reconnecting
+  useEffect(() => {
+    if (socketManager && user) {
+      socketManager.setUserInfo(user);
+    }
+  }, [socketManager, user]);
 
   // Handle Code Execution
   const handleRunCode = async () => {
@@ -174,7 +202,12 @@ const RoomPage = () => {
         stdin: ''
       });
 
-      setOutput(result);
+      const status = result.status || (result.exitCode === 0 ? 'SUCCESS' : (result.exitCode === 124 ? 'TIMEOUT' : 'ERROR'));
+      setOutput({
+        ...result,
+        status,
+        executionTimeMs: result.durationMs ?? result.executionTimeMs
+      });
     } catch (err) {
       console.error('Code execution failed:', err);
       setOutput({
@@ -191,11 +224,11 @@ const RoomPage = () => {
   const handleLanguageChange = async (newLang) => {
     setLanguage(newLang);
     // Optionally update room language on backend if owner
-    if (room && room.ownerId === user?.id) {
+    const isRoomOwner = Boolean(user?.id && room?.ownerId && String(user.id) === String(room.ownerId));
+    if (room && isRoomOwner) {
       try {
         await roomApi.update(roomId, {
-          name: room.name,
-          description: room.description,
+          name: room.name || room.roomName,
           language: newLang
         });
         setRoom((prev) => ({ ...prev, language: newLang }));
@@ -252,7 +285,7 @@ const RoomPage = () => {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950 text-white select-none">
       {/* Top Navigation Bar */}
-      <RoomNavbar room={room} socketManager={socketManagerRef.current} />
+      <RoomNavbar room={room} socketManager={socketManager} />
 
       {/* Main Workspace Body */}
       <div className="flex flex-1 overflow-hidden">
@@ -268,7 +301,7 @@ const RoomPage = () => {
         <div className={`w-80 flex-shrink-0 h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
           <ChatPanel
             roomId={roomId}
-            socketManager={socketManagerRef.current}
+            socketManager={socketManager}
           />
         </div>
 
@@ -304,7 +337,7 @@ const RoomPage = () => {
                 fontSize={fontSize}
                 initialContent={room.content}
                 initialRevision={room.revision}
-                socketManager={socketManagerRef.current}
+                socketManager={socketManager}
                 onCodeChangeRef={getCodeRef}
               />
             </div>

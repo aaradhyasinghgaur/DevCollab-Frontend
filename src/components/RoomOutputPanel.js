@@ -14,7 +14,18 @@ const RoomOutputPanel = ({
   isRunning = false,
   onClear
 }) => {
-  const statusInfo = output ? STATUS_CONFIGS[output.status] || STATUS_CONFIGS.SUCCESS : null;
+  const getStatusKey = () => {
+    if (!output) return null;
+    if (output.status) return output.status;
+    if (output.exitCode === 0) return 'SUCCESS';
+    if (output.exitCode === 124) return 'TIMEOUT';
+    if (output.stderr && output.stderr.includes('error:')) return 'COMPILATION_ERROR';
+    return 'ERROR';
+  };
+
+  const statusKey = getStatusKey();
+  const statusInfo = statusKey ? STATUS_CONFIGS[statusKey] || STATUS_CONFIGS.ERROR : null;
+  const executionTime = output ? (output.durationMs ?? output.executionTimeMs) : null;
 
   return (
     <div className="flex flex-col h-full bg-slate-950 border-t border-gray-800/80 text-gray-200">
@@ -26,10 +37,10 @@ const RoomOutputPanel = ({
         </div>
 
         <div className="flex items-center gap-3">
-          {output?.executionTimeMs !== undefined && output?.executionTimeMs !== null && (
+          {executionTime !== undefined && executionTime !== null && (
             <div className="flex items-center gap-1 text-[11px] text-gray-400">
               <FiClock className="text-xs" />
-              <span>{output.executionTimeMs} ms</span>
+              <span>{executionTime} ms</span>
             </div>
           )}
 

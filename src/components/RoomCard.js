@@ -32,7 +32,7 @@ const RoomCard = ({ room, currentUserId, onDelete }) => {
     badge: 'bg-gray-500/10 text-gray-400 border-gray-500/20'
   };
 
-  const isOwner = currentUserId && room.ownerId === currentUserId;
+  const isOwner = currentUserId && String(room.ownerId) === String(currentUserId);
   const participants = room.participants || [];
   const participantCount = participants.length || 1;
   const roomId = room.roomId || room.id;
@@ -125,7 +125,7 @@ const RoomCard = ({ room, currentUserId, onDelete }) => {
         <div className="flex items-center">
           <div className="flex -space-x-2">
             {participants.slice(0, 3).map((p, idx) => {
-              const pName = p.userName || p.displayName || 'Dev';
+              const pName = p.displayName || p.userName || p.username || 'Dev';
               const pInitial = pName.charAt(0).toUpperCase();
               const colorClass = AVATAR_COLORS[idx % AVATAR_COLORS.length];
               return (
