@@ -5,7 +5,8 @@ const normalizeUrl = (url) => {
   if (!url) return 'http://localhost:8080';
   let cleaned = url.trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(cleaned)) {
-    cleaned = `https://${cleaned}`;
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    cleaned = `${isHttps ? 'https' : 'http'}://${cleaned}`;
   }
   return cleaned;
 };

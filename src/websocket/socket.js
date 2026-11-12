@@ -8,10 +8,28 @@ const isValidUuid = (val) =>
 export const getWsUrl = () => {
   const rawWs = process.env.REACT_APP_WS_URL;
   if (rawWs && rawWs.trim()) {
-    // SockJS requires http/https scheme, convert ws/wss if provided
-    return rawWs.trim().replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+    let cleaned = rawWs.trim().replace(/\/+$/, '');
+    // Ensure absolute protocol scheme is always present so browsers never resolve it as a relative URL
+    if (/^wss:\/\//i.test(cleaned)) {
+      cleaned = cleaned.replace(/^wss:\/\//i, 'https://');
+    } else if (/^ws:\/\//i.test(cleaned)) {
+      cleaned = cleaned.replace(/^ws:\/\//i, 'http://');
+    } else if (!/^https?:\/\//i.test(cleaned)) {
+      const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+      cleaned = `${isHttps ? 'https' : 'http'}://${cleaned}`;
+    }
+    if (!/\/ws$/i.test(cleaned)) {
+      cleaned = `${cleaned}/ws`;
+    }
+    return cleaned;
   }
-  return `${API_BASE_URL.replace(/\/+$/, '')}/ws`;
+
+  let base = API_BASE_URL.replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(base)) {
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    base = `${isHttps ? 'https' : 'http'}://${base}`;
+  }
+  return `${base}/ws`;
 };
 
 export class RoomSocketManager {
@@ -37,6 +55,7 @@ export class RoomSocketManager {
   connect() {
     const token = getAuthToken();
     const wsUrl = getWsUrl();
+    console.log('[DevCollab] Connecting to WebSocket at:', wsUrl);
 
     this.client = new Client({
       webSocketFactory: () => new SockJS(wsUrl),
