@@ -263,7 +263,7 @@ const RoomPage = () => {
       setSocketManager(null);
       setSocketConnected(false);
     };
-  }, [roomId, navigate]);
+  }, [roomId, navigate, normalizeExecution]);
 
   // Keep socketManager updated with latest authenticated user without reconnecting
   useEffect(() => {

@@ -5,8 +5,7 @@ import {
   FiClock,
   FiCheckCircle,
   FiAlertCircle,
-  FiList,
-  FiMaximize2
+  FiList
 } from 'react-icons/fi';
 
 const STATUS_CONFIGS = {

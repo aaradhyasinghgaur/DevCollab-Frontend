@@ -274,21 +274,24 @@ const RoomEditor = ({
     // Purge any lingering legacy style tags from earlier sessions
     const legacyStyles = document.querySelectorAll('style[id^="peer-cursor-style-"]');
     legacyStyles.forEach((s) => s.remove());
+    const peerWidgets = peerWidgetsRef.current;
+    const disposables = listenerDisposablesRef.current;
+    const syncTimer = fullSyncTimerRef.current;
 
     return () => {
-      if (fullSyncTimerRef.current) {
-        clearTimeout(fullSyncTimerRef.current);
+      if (syncTimer) {
+        clearTimeout(syncTimer);
       }
-      listenerDisposablesRef.current.forEach((d) => {
+      disposables.forEach((d) => {
         try { d.dispose(); } catch (e) {}
       });
-      listenerDisposablesRef.current = [];
+      disposables.length = 0;
 
-      peerWidgetsRef.current.forEach(({ widget, timer }) => {
+      peerWidgets.forEach(({ widget, timer }) => {
         if (timer) clearTimeout(timer);
         if (widget) widget.destroy();
       });
-      peerWidgetsRef.current.clear();
+      peerWidgets.clear();
     };
   }, []);
 
