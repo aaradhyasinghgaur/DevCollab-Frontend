@@ -28,42 +28,44 @@ const AVATAR_COLORS = [
   'bg-rose-700'
 ];
 
-export const formatLastActive = (lastSeenAt) => {
-  if (!lastSeenAt) return 'Last active recently';
+export const formatLastEdited = (timestamp) => {
+  if (!timestamp) return 'Last edited recently';
   try {
-    const date = new Date(lastSeenAt);
-    if (isNaN(date.getTime())) return 'Last active recently';
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) return 'Last edited recently';
 
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
 
     if (diffMs < 0 || diffMs < 60_000) {
-      return 'Last active just now';
+      return 'Last edited just now';
     }
 
     const diffMins = Math.floor(diffMs / 60_000);
     if (diffMins < 60) {
-      return `Last active ${diffMins}m ago`;
+      return `Last edited ${diffMins}m ago`;
     }
 
     const diffHours = Math.floor(diffMins / 60);
     if (diffHours < 24) {
-      return `Last active ${diffHours}h ago`;
+      return `Last edited ${diffHours}h ago`;
     }
 
     const diffDays = Math.floor(diffHours / 24);
     if (diffDays === 1) {
-      return 'Last active yesterday';
+      return 'Last edited yesterday';
     }
     if (diffDays < 7) {
-      return `Last active ${diffDays}d ago`;
+      return `Last edited ${diffDays}d ago`;
     }
 
-    return `Last active ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+    return `Last edited ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
   } catch (e) {
-    return 'Last active recently';
+    return 'Last edited recently';
   }
 };
+
+export const formatLastActive = formatLastEdited;
 
 const ParticipantCard = ({
   participant,
@@ -155,7 +157,7 @@ const ParticipantCard = ({
             )}
           </div>
           <span className={`block text-[10px] ${isOnline ? 'text-emerald-400 font-medium' : 'text-gray-400'}`}>
-            {isOnline ? 'Active now' : formatLastActive(participant.lastSeenAt)}
+            {isOnline ? 'Active now' : formatLastEdited(participant.lastEditedAt || participant.lastSeenAt)}
           </span>
         </div>
       </div>

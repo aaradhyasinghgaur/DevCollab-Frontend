@@ -39,7 +39,6 @@ const ParticipantPanel = ({
   }, [participants, currentUserId]);
 
   const activeCount = participants.filter((p) => p.online === true).length;
-  const offlineCount = participants.length - activeCount;
 
   return (
     <div className="flex flex-col h-full bg-slate-900 border-l border-gray-800/80 text-white">
@@ -50,15 +49,10 @@ const ParticipantPanel = ({
           <span>Participants</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="flex items-center gap-1 rounded-full border border-emerald-900/40 bg-emerald-950/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+          <span className="flex items-center gap-1 rounded-full border border-emerald-900/40 bg-emerald-950/40 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-400">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             {activeCount} active
           </span>
-          {offlineCount > 0 && (
-            <span className="rounded-full border border-gray-800 bg-slate-900 px-2 py-0.5 text-[10px] font-medium text-gray-400">
-              {offlineCount} offline
-            </span>
-          )}
         </div>
       </div>
 
