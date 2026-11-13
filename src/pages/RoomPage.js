@@ -134,8 +134,7 @@ const RoomPage = () => {
       }
 
       if (presenceMsg.type === 'ROOM_DELETED' || presenceMsg.status === 'ROOM_DELETED') {
-        alert(presenceMsg.message || 'This room has been deleted by the owner.');
-        navigate('/dashboard');
+        navigate('/dashboard', { replace: true });
         return;
       }
 

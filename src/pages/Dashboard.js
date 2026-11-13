@@ -4,6 +4,7 @@ import DashboardNavBar from '../components/DashboardNavBar';
 import RoomCard from '../components/RoomCard';
 import { roomApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { DashboardSocketManager } from '../websocket/socket';
 import { FiPlus, FiHash, FiX, FiFolder, FiUsers } from 'react-icons/fi';
 
 const SUPPORTED_LANGUAGES = [
@@ -58,6 +59,23 @@ const Dashboard = () => {
   useEffect(() => {
     fetchRooms();
   }, [fetchRooms]);
+
+  // Real-time synchronization of room changes (e.g. owner deletes room -> removed instantly for all users)
+  useEffect(() => {
+    const manager = new DashboardSocketManager((event) => {
+      if (event && (event.type === 'ROOM_DELETED' || event.status === 'ROOM_DELETED')) {
+        const deletedId = event.roomId || event.id;
+        if (deletedId) {
+          setRooms((prev) => prev.filter((r) => String(r.roomId || r.id) !== String(deletedId)));
+        }
+      }
+    });
+    manager.connect();
+
+    return () => {
+      manager.disconnect();
+    };
+  }, []);
 
   // Filtered rooms
   const filteredRooms = useMemo(() => {
@@ -141,11 +159,13 @@ const Dashboard = () => {
 
     if (window.confirm(confirmMessage)) {
       try {
+        setRooms((prev) => prev.filter((r) => String(r.roomId || r.id) !== String(rId)));
         await roomApi.delete(rId);
         fetchRooms();
       } catch (err) {
         console.error('Delete room error:', err);
         setError(err.message || 'Failed to delete room.');
+        fetchRooms();
       }
     }
   };

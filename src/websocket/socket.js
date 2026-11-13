@@ -315,4 +315,66 @@ export class RoomSocketManager {
   }
 }
 
+export class DashboardSocketManager {
+  constructor(onEvent) {
+    this.onEvent = onEvent;
+    this.client = null;
+    this.connected = false;
+  }
+
+  connect() {
+    const token = getAuthToken();
+    const nativeWsUrl = getNativeWsUrl();
+    const wsUrl = getWsUrl();
+
+    const config = {
+      connectHeaders: token ? { Authorization: `Bearer ${token}` } : {},
+      reconnectDelay: 3000,
+      heartbeatIncoming: 0,
+      heartbeatOutgoing: 0,
+      onConnect: () => {
+        this.connected = true;
+        try {
+          this.client.subscribe('/topic/rooms', (message) => {
+            try {
+              const data = JSON.parse(message.body);
+              if (this.onEvent) {
+                this.onEvent(data);
+              }
+            } catch (e) {}
+          });
+        } catch (e) {}
+      },
+      onDisconnect: () => {
+        this.connected = false;
+      },
+      onWebSocketClose: () => {
+        this.connected = false;
+      }
+    };
+
+    try {
+      config.brokerURL = nativeWsUrl;
+      this.client = new Client(config);
+      this.client.activate();
+    } catch (e) {
+      try {
+        config.webSocketFactory = () => new SockJS(wsUrl);
+        this.client = new Client(config);
+        this.client.activate();
+      } catch (err) {}
+    }
+  }
+
+  disconnect() {
+    if (this.client) {
+      try {
+        this.client.deactivate();
+      } catch (e) {}
+      this.client = null;
+    }
+    this.connected = false;
+  }
+}
+
 export default RoomSocketManager;

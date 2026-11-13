@@ -43,10 +43,10 @@ const RoomNavbar = ({ room, socketManager }) => {
     if (window.confirm(`Are you sure you want to delete "${targetRoomName}"? This action cannot be undone and all participants will be disconnected.`)) {
       try {
         setLeaving(true);
+        await roomApi.delete(targetRoomId);
         if (socketManager) {
           socketManager.leave(user);
         }
-        await roomApi.delete(targetRoomId);
       } catch (e) {
         console.warn('Delete room error:', e);
       } finally {
@@ -81,10 +81,10 @@ const RoomNavbar = ({ room, socketManager }) => {
     if (window.confirm(`Are you sure you want to delete "${targetRoomName}" for yourself? It will be removed from your workspace, but other members will not be affected.`)) {
       try {
         setLeaving(true);
+        await roomApi.delete(targetRoomId);
         if (socketManager) {
           socketManager.leave(user);
         }
-        await roomApi.delete(targetRoomId);
       } catch (e) {
         console.warn('Delete room for self error (proceeding to dashboard):', e);
       } finally {

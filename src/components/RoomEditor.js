@@ -128,9 +128,6 @@ const RoomEditor = ({
   const isRemoteChange = useRef(false);
   const clientIdRef = useRef('client-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now());
 
-  // Debounced full sync timer reference
-  const fullSyncTimerRef = useRef(null);
-
   // Monaco Content Widgets storage: Map<clientKey, { widget: RemoteCursorWidget, timer: any }>
   const peerWidgetsRef = useRef(new Map());
 
@@ -284,29 +281,10 @@ const RoomEditor = ({
               endLineNumber: change.range.endLineNumber,
               endColumn: change.range.endColumn
             },
-            revision: currentRevision.current,
-            fullContent
+            revision: currentRevision.current
           });
         }
       });
-
-      // Debounce a full-sync broadcast backup (1.5s after typing pauses)
-      // Guarantees room-wide consistency even if a packet is delayed or dropped
-      if (fullSyncTimerRef.current) {
-        clearTimeout(fullSyncTimerRef.current);
-      }
-      fullSyncTimerRef.current = setTimeout(() => {
-        const liveSocket = socketManagerRef.current;
-        if (liveSocket && (liveSocket.connected || liveSocket.client?.connected) && editorRef.current) {
-          const currentCode = editorRef.current.getValue();
-          liveSocket.sendCodeEdit({
-            clientId: clientIdRef.current,
-            ...(validUserId ? { userId: validUserId } : {}),
-            revision: currentRevision.current,
-            fullContent: currentCode
-          });
-        }
-      }, 1500);
     });
     listenerDisposablesRef.current.push(contentDisp);
   };
@@ -318,12 +296,7 @@ const RoomEditor = ({
     legacyStyles.forEach((s) => s.remove());
     const peerWidgets = peerWidgetsRef.current;
     const disposables = listenerDisposablesRef.current;
-    const syncTimer = fullSyncTimerRef.current;
-
     return () => {
-      if (syncTimer) {
-        clearTimeout(syncTimer);
-      }
       disposables.forEach((d) => {
         try { d.dispose(); } catch (e) {}
       });
@@ -429,7 +402,7 @@ const RoomEditor = ({
             {
               range: rangeToApply,
               text: textToApply,
-              forceMoveMarkers: false
+              forceMoveMarkers: true
             }
           ]);
 
@@ -455,23 +428,18 @@ const RoomEditor = ({
 
             editor.setPosition({ lineNumber: newLn, column: newCol });
           }
-        }
-
-        // Reconcile with msg.fullContent if provided and content diverged from server truth
-        if (msg.fullContent != null && editor.getValue() !== msg.fullContent) {
-          const posBeforeSync = editor.getPosition();
-          editor.setValue(msg.fullContent);
-          if (posBeforeSync) {
-            editor.setPosition(posBeforeSync);
+        } else if (!msg.type && msg.fullContent != null) {
+          // Explicit full-sync message only (when no delta type is set)
+          if (editor.getValue() !== msg.fullContent) {
+            const posBeforeSync = editor.getPosition();
+            editor.setValue(msg.fullContent);
+            if (posBeforeSync) {
+              editor.setPosition(posBeforeSync);
+            }
           }
         }
       } catch (err) {
         console.error('[DevCollab] Error applying remote OT edit:', err);
-        if (msg.fullContent != null && editor.getValue() !== msg.fullContent) {
-          const pos = editor.getPosition();
-          editor.setValue(msg.fullContent);
-          if (pos) editor.setPosition(pos);
-        }
       } finally {
         isRemoteChange.current = false;
       }
