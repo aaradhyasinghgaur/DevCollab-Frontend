@@ -139,6 +139,19 @@ const RoomPage = () => {
         return;
       }
 
+      if (presenceMsg.type === 'USER_LEFT' || presenceMsg.status === 'USER_LEFT') {
+        if (currentUserId && String(presenceMsg.userId) === String(currentUserId)) {
+          navigate('/dashboard');
+          return;
+        }
+        if (Array.isArray(presenceMsg.participants)) {
+          setParticipants(presenceMsg.participants);
+        } else {
+          setParticipants((prev) => prev.filter((p) => String(p.userId) !== String(presenceMsg.userId)));
+        }
+        return;
+      }
+
       if (presenceMsg.type === 'ROLE_UPDATED' || presenceMsg.status === 'ROLE_UPDATED') {
         if (Array.isArray(presenceMsg.participants) && presenceMsg.participants.length > 0) {
           const mapped = presenceMsg.participants.map((p) => {

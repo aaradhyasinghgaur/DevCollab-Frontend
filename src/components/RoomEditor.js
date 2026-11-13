@@ -546,7 +546,9 @@ const RoomEditor = ({
                       presenceMsg.type === 'OFFLINE' ||
                       presenceMsg.status === 'OFFLINE' ||
                       presenceMsg.type === 'KICKED' ||
-                      presenceMsg.status === 'KICKED';
+                      presenceMsg.status === 'KICKED' ||
+                      presenceMsg.type === 'USER_LEFT' ||
+                      presenceMsg.status === 'USER_LEFT';
 
       if (isLeave) {
         const targetId = presenceMsg.userId ? String(presenceMsg.userId) : null;
