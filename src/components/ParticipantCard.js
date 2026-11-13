@@ -31,7 +31,20 @@ const AVATAR_COLORS = [
 export const formatLastEdited = (timestamp) => {
   if (!timestamp) return 'Last edited recently';
   try {
-    const date = new Date(timestamp);
+    let date;
+    if (typeof timestamp === 'number') {
+      const ms = timestamp < 1e11 ? timestamp * 1000 : timestamp;
+      date = new Date(ms);
+    } else if (typeof timestamp === 'string') {
+      let dateStr = timestamp.trim();
+      if (!dateStr.endsWith('Z') && !/[+-]\d{2}(?::?\d{2})?$/.test(dateStr)) {
+        dateStr += 'Z';
+      }
+      date = new Date(dateStr);
+    } else {
+      date = new Date(timestamp);
+    }
+
     if (isNaN(date.getTime())) return 'Last edited recently';
 
     const now = new Date();

@@ -44,7 +44,7 @@ const RoomNavbar = ({ room, socketManager }) => {
       try {
         setLeaving(true);
         if (socketManager) {
-          socketManager.leave();
+          socketManager.leave(user);
         }
         await roomApi.delete(targetRoomId);
       } catch (e) {
@@ -62,7 +62,7 @@ const RoomNavbar = ({ room, socketManager }) => {
       try {
         setLeaving(true);
         if (socketManager) {
-          socketManager.leave();
+          socketManager.leave(user);
         }
         await roomApi.leave(targetRoomId);
       } catch (e) {
@@ -82,7 +82,7 @@ const RoomNavbar = ({ room, socketManager }) => {
       try {
         setLeaving(true);
         if (socketManager) {
-          socketManager.leave();
+          socketManager.leave(user);
         }
         await roomApi.delete(targetRoomId);
       } catch (e) {
@@ -100,7 +100,7 @@ const RoomNavbar = ({ room, socketManager }) => {
         <button
           onClick={() => {
             if (socketManager) {
-              socketManager.leave();
+              socketManager.leave(user);
             }
             navigate('/dashboard');
           }}

@@ -267,12 +267,14 @@ export class RoomSocketManager {
     });
   }
 
-  leave() {
+  leave(extra = {}) {
     if (this.client && (this.connected || this.client.connected)) {
       try {
-        const validUserId = (this.userInfo?.id && isValidUuid(this.userInfo.id)) ? this.userInfo.id : undefined;
-        const username = this.userInfo?.username || this.userInfo?.email;
-        const displayName = this.userInfo?.displayName || this.userInfo?.username || 'Collaborator';
+        const u = this.userInfo || extra || {};
+        const rawId = u.id || u.userId || extra.id || extra.userId;
+        const validUserId = isValidUuid(rawId) ? rawId : undefined;
+        const username = u.username || u.email || extra.username || extra.email;
+        const displayName = u.displayName || u.username || extra.displayName || 'Collaborator';
 
         this.send('presence', {
           status: 'LEAVE',

@@ -188,7 +188,7 @@ const RoomPage = () => {
             return { ...p, online: true };
           }
           if (isTarget && isLeave) {
-            return { ...p, online: false };
+            return { ...p, online: false, lastSeenAt: p.lastSeenAt || new Date().toISOString() };
           }
           if (isTarget && !isLeave) {
             return { ...p, online: true };
@@ -205,7 +205,8 @@ const RoomPage = () => {
               displayName: presenceMsg.displayName || presenceMsg.username || 'Collaborator',
               online: true,
               role: 'EDITOR',
-              roles: 'EDITOR'
+              roles: 'EDITOR',
+              lastSeenAt: new Date().toISOString()
             });
           }
         }
@@ -224,14 +225,19 @@ const RoomPage = () => {
               displayName: presenceMsg.displayName || presenceMsg.username || 'Collaborator',
               online: true,
               role: 'EDITOR',
-              roles: 'EDITOR'
+              roles: 'EDITOR',
+              lastSeenAt: new Date().toISOString()
             };
             return [...prev, newParticipant];
           }
 
           return prev.map((p) => {
             if (String(p.userId) === String(presenceMsg.userId)) {
-              return { ...p, online: !isLeave };
+              return {
+                ...p,
+                online: !isLeave,
+                lastSeenAt: isLeave ? new Date().toISOString() : p.lastSeenAt
+              };
             }
             if (currentUserId && String(p.userId) === String(currentUserId)) {
               return { ...p, online: true };
@@ -252,11 +258,11 @@ const RoomPage = () => {
           displayName: currentUser?.displayName || currentUser?.username
         });
       }
-    }, 15000);
+    }, 10000);
 
     const handleBeforeUnload = () => {
       if (manager) {
-        manager.leave();
+        manager.leave(userRef.current);
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -265,7 +271,7 @@ const RoomPage = () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       clearInterval(heartbeatInterval);
       if (unsubPresence) unsubPresence();
-      manager.leave();
+      manager.leave(userRef.current);
       setSocketManager(null);
       setSocketConnected(false);
     };
