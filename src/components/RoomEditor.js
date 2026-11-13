@@ -161,6 +161,16 @@ const RoomEditor = ({
     loadInitialCode();
   }, [loadInitialCode]);
 
+  // Update Monaco options dynamically when access rights / readOnly changes
+  useEffect(() => {
+    if (editorRef.current) {
+      editorRef.current.updateOptions({
+        readOnly: Boolean(readOnly),
+        domReadOnly: Boolean(readOnly)
+      });
+    }
+  }, [readOnly]);
+
   // Broadcast initial cursor position when socketManager connects
   useEffect(() => {
     if (socketManager && editorRef.current) {
@@ -242,7 +252,7 @@ const RoomEditor = ({
 
     // 2. Listen to local typing changes and publish deltas
     const contentDisp = editor.onDidChangeModelContent((event) => {
-      if (isRemoteChange.current) return;
+      if (isRemoteChange.current || readOnly) return;
 
       const socket = socketManagerRef.current;
       if (!socket) return;

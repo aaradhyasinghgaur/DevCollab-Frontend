@@ -43,7 +43,7 @@ export class RoomSocketManager {
     this.userInfo = userInfo;
     this.client = null;
     this.subscriptions = new Map(); // topic -> stompSubscription
-    this.subCallbacks = new Map(); // topic -> callback function
+    this.listeners = new Map(); // topic -> Set<callback>
     this.outgoingQueue = []; // Queue outgoing messages if sent before socket is connected
     this.onConnectCallback = onConnectCallback;
     this.onDisconnectCallback = onDisconnectCallback;
@@ -86,8 +86,11 @@ export class RoomSocketManager {
           }
 
           // Resubscribe all registered topics upon connection or reconnection
-          this.subCallbacks.forEach((cb, topic) => {
-            this._createStompSubscription(topic, cb);
+          this.subscriptions.clear();
+          this.listeners.forEach((callbacks, topic) => {
+            if (callbacks && callbacks.size > 0) {
+              this._ensureStompSubscription(topic);
+            }
           });
 
           // Flush any messages that were queued while connecting
@@ -157,20 +160,31 @@ export class RoomSocketManager {
     });
   }
 
-  _createStompSubscription(topic, callback) {
+  _ensureStompSubscription(topic) {
     if (!this.client || !this.client.connected) return null;
+    if (this.subscriptions.has(topic)) {
+      return this.subscriptions.get(topic);
+    }
+
     const fullTopic = topic.startsWith('/') ? topic : `/topic/room/${this.roomId}/${topic}`;
     try {
-      const existing = this.subscriptions.get(topic);
-      if (existing) {
-        try { existing.unsubscribe(); } catch (e) {}
-      }
       const sub = this.client.subscribe(fullTopic, (message) => {
+        let payload;
         try {
-          const payload = JSON.parse(message.body);
-          callback(payload);
+          payload = JSON.parse(message.body);
         } catch (e) {
-          callback(message.body);
+          payload = message.body;
+        }
+
+        const callbacks = this.listeners.get(topic);
+        if (callbacks) {
+          callbacks.forEach((cb) => {
+            try {
+              cb(payload);
+            } catch (err) {
+              console.error(`[DevCollab] Error in listener for topic ${topic}:`, err);
+            }
+          });
         }
       });
       this.subscriptions.set(topic, sub);
@@ -182,18 +196,27 @@ export class RoomSocketManager {
   }
 
   subscribe(topic, callback) {
-    this.subCallbacks.set(topic, callback);
+    if (!this.listeners.has(topic)) {
+      this.listeners.set(topic, new Set());
+    }
+    this.listeners.get(topic).add(callback);
 
     if (this.client && this.client.connected) {
-      this._createStompSubscription(topic, callback);
+      this._ensureStompSubscription(topic);
     }
 
     return () => {
-      this.subCallbacks.delete(topic);
-      const sub = this.subscriptions.get(topic);
-      if (sub) {
-        try { sub.unsubscribe(); } catch (e) {}
-        this.subscriptions.delete(topic);
+      const callbacks = this.listeners.get(topic);
+      if (callbacks) {
+        callbacks.delete(callback);
+        if (callbacks.size === 0) {
+          this.listeners.delete(topic);
+          const sub = this.subscriptions.get(topic);
+          if (sub) {
+            try { sub.unsubscribe(); } catch (e) {}
+            this.subscriptions.delete(topic);
+          }
+        }
       }
     };
   }
@@ -304,6 +327,7 @@ export class RoomSocketManager {
       } catch (e) {}
     });
     this.subscriptions.clear();
+    this.listeners.clear();
 
     if (this.client) {
       try {

@@ -117,58 +117,71 @@ const RoomPage = () => {
     const unsubPresence = manager.subscribe('presence', (presenceMsg) => {
       if (!presenceMsg) return;
 
-      const currentUserId = userRef.current?.id;
+      const currentUserId = userRef.current?.id || userRef.current?.userId;
+      const isMatch = (id1, id2) => Boolean(id1 && id2 && String(id1).toLowerCase() === String(id2).toLowerCase());
 
       if (presenceMsg.type === 'KICKED' || presenceMsg.status === 'KICKED') {
-        if (currentUserId && String(presenceMsg.userId) === String(currentUserId)) {
+        const isSelfKicked = isMatch(presenceMsg.userId, currentUserId);
+        if (isSelfKicked) {
           alert(presenceMsg.message || 'You have been removed from this room by the owner.');
-          navigate('/dashboard');
+          navigate('/dashboard', { replace: true });
           return;
         }
         if (Array.isArray(presenceMsg.participants)) {
           setParticipants(presenceMsg.participants);
         } else {
-          setParticipants((prev) => prev.filter((p) => String(p.userId) !== String(presenceMsg.userId)));
+          setParticipants((prev) => prev.filter((p) => !isMatch(p.userId, presenceMsg.userId)));
         }
         return;
       }
 
       if (presenceMsg.type === 'ROOM_DELETED' || presenceMsg.status === 'ROOM_DELETED') {
+        alert(presenceMsg.message || 'This room has been deleted by the owner.');
         navigate('/dashboard', { replace: true });
         return;
       }
 
       if (presenceMsg.type === 'USER_LEFT' || presenceMsg.status === 'USER_LEFT') {
-        if (currentUserId && String(presenceMsg.userId) === String(currentUserId)) {
+        if (isMatch(presenceMsg.userId, currentUserId)) {
           navigate('/dashboard');
           return;
         }
         if (Array.isArray(presenceMsg.participants)) {
           setParticipants(presenceMsg.participants);
         } else {
-          setParticipants((prev) => prev.filter((p) => String(p.userId) !== String(presenceMsg.userId)));
+          setParticipants((prev) => prev.filter((p) => !isMatch(p.userId, presenceMsg.userId)));
         }
         return;
       }
 
       if (presenceMsg.type === 'ROLE_UPDATED' || presenceMsg.status === 'ROLE_UPDATED') {
+        const newR = presenceMsg.role || presenceMsg.roles;
         if (Array.isArray(presenceMsg.participants) && presenceMsg.participants.length > 0) {
           const mapped = presenceMsg.participants.map((p) => {
-            if (currentUserId && String(p.userId) === String(currentUserId)) {
-              return { ...p, online: true };
-            }
-            return { ...p, online: p.online === true || p.online === 'true' };
+            const isSelf = isMatch(p.userId, currentUserId);
+            const isTarget = isMatch(p.userId, presenceMsg.userId);
+            const updatedRole = (isTarget && newR) ? newR : (p.roles || p.role || 'EDITOR');
+            return {
+              ...p,
+              roles: updatedRole,
+              role: updatedRole,
+              online: isSelf ? true : (p.online === true || p.online === 'true')
+            };
           });
           setParticipants(mapped);
-        } else if (presenceMsg.userId && (presenceMsg.role || presenceMsg.roles)) {
-          const newR = presenceMsg.role || presenceMsg.roles;
+        } else if (presenceMsg.userId && newR) {
           setParticipants((prev) =>
             prev.map((p) =>
-              String(p.userId) === String(presenceMsg.userId)
+              isMatch(p.userId, presenceMsg.userId)
                 ? { ...p, roles: newR, role: newR }
                 : p
             )
           );
+        }
+
+        if (isMatch(presenceMsg.userId, currentUserId) && newR) {
+          const roleLabel = String(newR).toUpperCase() === 'VIEWER' ? 'Viewer (Read-Only)' : 'Editor';
+          alert(`Your access rights have been updated to: ${roleLabel}`);
         }
         return;
       }
@@ -181,8 +194,8 @@ const RoomPage = () => {
       // 1. If backend gave a full updated participants list, use it with target overrides
       if (Array.isArray(presenceMsg.participants) && presenceMsg.participants.length > 0) {
         let mapped = presenceMsg.participants.map((p) => {
-          const isTarget = presenceMsg.userId && String(p.userId) === String(presenceMsg.userId);
-          const isSelf = currentUserId && String(p.userId) === String(currentUserId);
+          const isTarget = isMatch(p.userId, presenceMsg.userId);
+          const isSelf = isMatch(p.userId, currentUserId);
           if (isSelf) {
             return { ...p, online: true };
           }
@@ -197,14 +210,14 @@ const RoomPage = () => {
 
         // If a new participant joined and is not yet in the list, append them
         if (presenceMsg.userId && !isLeave) {
-          const exists = mapped.some((p) => String(p.userId) === String(presenceMsg.userId));
+          const exists = mapped.some((p) => isMatch(p.userId, presenceMsg.userId));
           if (!exists) {
             mapped.push({
               userId: presenceMsg.userId,
               displayName: presenceMsg.displayName || presenceMsg.username || 'Collaborator',
               online: true,
-              role: 'EDITOR',
-              roles: 'EDITOR',
+              role: presenceMsg.role || presenceMsg.roles || 'EDITOR',
+              roles: presenceMsg.role || presenceMsg.roles || 'EDITOR',
               lastSeenAt: new Date().toISOString()
             });
           }
@@ -217,28 +230,28 @@ const RoomPage = () => {
       // 2. Direct atomic presence update for the specific user
       if (presenceMsg.userId) {
         setParticipants((prev) => {
-          const exists = prev.some((p) => String(p.userId) === String(presenceMsg.userId));
+          const exists = prev.some((p) => isMatch(p.userId, presenceMsg.userId));
           if (!exists && !isLeave) {
             const newParticipant = {
               userId: presenceMsg.userId,
               displayName: presenceMsg.displayName || presenceMsg.username || 'Collaborator',
               online: true,
-              role: 'EDITOR',
-              roles: 'EDITOR',
+              role: presenceMsg.role || presenceMsg.roles || 'EDITOR',
+              roles: presenceMsg.role || presenceMsg.roles || 'EDITOR',
               lastSeenAt: new Date().toISOString()
             };
             return [...prev, newParticipant];
           }
 
           return prev.map((p) => {
-            if (String(p.userId) === String(presenceMsg.userId)) {
+            if (isMatch(p.userId, presenceMsg.userId)) {
               return {
                 ...p,
                 online: !isLeave,
                 lastSeenAt: isLeave ? new Date().toISOString() : p.lastSeenAt
               };
             }
-            if (currentUserId && String(p.userId) === String(currentUserId)) {
+            if (isMatch(p.userId, currentUserId)) {
               return { ...p, online: true };
             }
             return p;
