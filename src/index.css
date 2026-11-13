@@ -28,32 +28,5 @@
   background: #475569;
 }
 
-/* Peer Cursor styling in Monaco */
-.peer-cursor {
-  border-left: 2px solid #a855f7;
-  position: relative;
-  pointer-events: none;
-  z-index: 10;
-  animation: cursor-pulse 1.5s infinite;
-}
 
-@keyframes cursor-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
-.peer-cursor-tooltip {
-  position: absolute;
-  top: -18px;
-  left: -2px;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 4px;
-  color: white;
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 20;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-}
 

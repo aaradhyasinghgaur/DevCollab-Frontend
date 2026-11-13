@@ -25,10 +25,23 @@ const RoomPage = () => {
   const [language, setLanguage] = useState('JAVASCRIPT');
   const [fontSize, setFontSize] = useState(14);
 
-  // Code Execution
+  // Local terminal execution history (isolated per user session, like VS Code)
+  const terminalStorageKey = `devcollab_terminal_${roomId}_${user?.id || 'guest'}`;
   const [isRunning, setIsRunning] = useState(false);
-  const [output, setOutput] = useState(null);
-  const [outputLogs, setOutputLogs] = useState([]);
+  const [terminalHistory, setTerminalHistory] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem(`devcollab_terminal_${roomId}_${user?.id || 'guest'}`);
+      return cached ? JSON.parse(cached) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(terminalStorageKey, JSON.stringify(terminalHistory));
+    } catch (e) {}
+  }, [terminalHistory, terminalStorageKey]);
 
   // Sidebar & Layout State
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'participants' | 'output' | null
@@ -78,43 +91,9 @@ const RoomPage = () => {
     }
   }, [roomId, user]);
 
-  // Helper to normalize execution response
-  const normalizeExecution = useCallback((result) => {
-    if (!result) return null;
-    let status = result.status;
-    if (!status) {
-      if (result.exitCode === 0) status = 'SUCCESS';
-      else if (result.exitCode === 124) status = 'TIMEOUT';
-      else if (result.stderr && result.stderr.includes('error:')) status = 'COMPILATION_ERROR';
-      else status = 'ERROR';
-    }
-    return {
-      ...result,
-      id: result.id || 'log-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
-      status,
-      durationMs: result.durationMs ?? result.executionTimeMs ?? 0,
-      executedAt: result.executedAt || new Date().toISOString()
-    };
-  }, []);
-
-  // Load historical execution runs for this room (up to 30)
-  const loadExecutions = useCallback(async () => {
-    try {
-      const data = await executionApi.getExecutions(roomId);
-      if (Array.isArray(data) && data.length > 0) {
-        const normalized = data.slice(0, 30).map(normalizeExecution);
-        setOutputLogs(normalized);
-        setOutput(normalized[0]);
-      }
-    } catch (e) {
-      console.warn('Could not load past executions:', e);
-    }
-  }, [roomId, normalizeExecution]);
-
   useEffect(() => {
     fetchRoomDetails();
-    loadExecutions();
-  }, [fetchRoomDetails, loadExecutions]);
+  }, [fetchRoomDetails]);
 
   // Initialize WebSocket Connection
   useEffect(() => {
@@ -133,15 +112,6 @@ const RoomPage = () => {
 
     setSocketManager(manager);
     manager.connect();
-
-    // Subscribe to execution events broadcast to the room
-    const unsubExecution = manager.subscribe('execution', (execResult) => {
-      const normalized = normalizeExecution(execResult);
-      setOutputLogs((prev) => [normalized, ...prev.filter((l) => l.id !== normalized.id)].slice(0, 30));
-      setOutput(normalized);
-      setIsRunning(false);
-      setShowOutputBottom(true);
-    });
 
     // Subscribe to presence events (active, offline, leave, room_deleted, kicked)
     const unsubPresence = manager.subscribe('presence', (presenceMsg) => {
@@ -257,13 +227,12 @@ const RoomPage = () => {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       clearInterval(heartbeatInterval);
-      if (unsubExecution) unsubExecution();
       if (unsubPresence) unsubPresence();
       manager.leave();
       setSocketManager(null);
       setSocketConnected(false);
     };
-  }, [roomId, navigate, normalizeExecution]);
+  }, [roomId, navigate]);
 
   // Keep socketManager updated with latest authenticated user without reconnecting
   useEffect(() => {
@@ -277,10 +246,19 @@ const RoomPage = () => {
     }
   }, [socketManager, user]);
 
-  // Handle Code Execution
+  // Handle Code Execution (local terminal session, isolated per user)
   const handleRunCode = async () => {
     if (!getCodeRef.current) return;
     const code = getCodeRef.current();
+
+    const commandMap = {
+      JAVASCRIPT: 'node index.js',
+      PYTHON: 'python script.py',
+      JAVA: 'java Main.java',
+      CPP: 'g++ main.cpp && ./main',
+      C: 'gcc main.c && ./main'
+    };
+    const cmd = commandMap[language?.toUpperCase()] || `run ${language?.toLowerCase() || 'code'}`;
 
     try {
       setIsRunning(true);
@@ -292,22 +270,39 @@ const RoomPage = () => {
         stdin: ''
       });
 
-      const normalized = normalizeExecution(result);
-      setOutputLogs((prev) => [normalized, ...prev.filter((l) => l.id !== normalized.id)].slice(0, 30));
-      setOutput(normalized);
+      const newEntry = {
+        id: 'run-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+        command: cmd,
+        stdout: result?.stdout || '',
+        stderr: result?.stderr || '',
+        exitCode: result?.exitCode ?? (result?.stderr ? 1 : 0),
+        durationMs: result?.durationMs ?? result?.executionTimeMs ?? 0,
+        timestamp: Date.now()
+      };
+
+      setTerminalHistory((prev) => [...prev, newEntry]);
     } catch (err) {
       console.error('Code execution failed:', err);
-      const errorLog = normalizeExecution({
-        status: 'ERROR',
+      const errorEntry = {
+        id: 'err-' + Date.now(),
+        command: cmd,
+        stdout: '',
         stderr: err.message || 'Execution failed. Check backend runner configuration.',
         exitCode: 1,
-        durationMs: 0
-      });
-      setOutputLogs((prev) => [errorLog, ...prev].slice(0, 30));
-      setOutput(errorLog);
+        durationMs: 0,
+        timestamp: Date.now()
+      };
+      setTerminalHistory((prev) => [...prev, errorEntry]);
     } finally {
       setIsRunning(false);
     }
+  };
+
+  const handleClearTerminal = () => {
+    setTerminalHistory([]);
+    try {
+      sessionStorage.removeItem(terminalStorageKey);
+    } catch (e) {}
   };
 
   // Handle Language Change
@@ -461,14 +456,10 @@ const RoomPage = () => {
             {showOutputBottom && (
               <div className="h-[35%] w-full">
                 <RoomOutputPanel
-                  output={output}
-                  logs={outputLogs}
+                  history={terminalHistory}
                   isRunning={isRunning}
-                  onSelectLog={(log) => setOutput(log)}
-                  onClear={() => {
-                    setOutput(null);
-                    setOutputLogs([]);
-                  }}
+                  language={language}
+                  onClear={handleClearTerminal}
                 />
               </div>
             )}

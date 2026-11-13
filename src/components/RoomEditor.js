@@ -26,24 +26,32 @@ class RemoteCursorWidget {
     this.id = id;
     this.userId = userId;
     this.name = name;
-    this.color = color;
+    this.color = color || '#a855f7';
     this.domNode = document.createElement('div');
     this.domNode.className = 'monaco-remote-cursor-container';
     this.domNode.style.cssText = 'pointer-events: none; z-index: 50; position: absolute;';
 
-    const safeName = String(name || 'Peer').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    this.position = {
+      position: { lineNumber: 1, column: 1 },
+      preference: [0] // monaco.editor.ContentWidgetPositionPreference.EXACT
+    };
 
+    this.render();
+    try {
+      this.editor.addContentWidget(this);
+    } catch (e) {}
+  }
+
+  render() {
+    const safeName = String(this.name || 'Peer').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     this.domNode.innerHTML = `
       <div style="position: relative; width: 0; height: 19px;">
-        <div style="position: absolute; left: 0; top: 0; width: 2px; height: 100%; background: ${color}; border-radius: 1px; box-shadow: 0 0 6px ${color}99;"></div>
-        <div style="position: absolute; left: -2px; top: -18px; background: ${color}; color: #ffffff; font-size: 10px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 1px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.5); pointer-events: none; line-height: 1.2;">
+        <div style="position: absolute; left: 0; top: 0; width: 2px; height: 100%; background: ${this.color}; border-radius: 1px; box-shadow: 0 0 6px ${this.color}99;"></div>
+        <div style="position: absolute; left: -2px; top: -18px; background: ${this.color}; color: #ffffff; font-size: 10px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 1px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.5); pointer-events: none; line-height: 1.2;">
           ${safeName}
         </div>
       </div>
     `;
-
-    this.position = null;
-    this.editor.addContentWidget(this);
   }
 
   getId() {
@@ -58,9 +66,24 @@ class RemoteCursorWidget {
     return this.position;
   }
 
-  updatePosition(lineNumber, column) {
+  update(lineNumber, column, newName, newColor) {
+    if (newName && newName !== this.name) {
+      this.name = newName;
+      this.render();
+    }
+    if (newColor && newColor !== this.color) {
+      this.color = newColor;
+      this.render();
+    }
+
+    const model = this.editor.getModel();
+    const maxLine = model ? model.getLineCount() : lineNumber;
+    const safeLine = Math.min(Math.max(1, lineNumber), maxLine);
+    const maxCol = model ? model.getLineMaxColumn(safeLine) : column;
+    const safeCol = Math.min(Math.max(1, column), maxCol);
+
     this.position = {
-      position: { lineNumber, column },
+      position: { lineNumber: safeLine, column: safeCol },
       preference: [0] // monaco.editor.ContentWidgetPositionPreference.EXACT
     };
     try {
@@ -141,6 +164,16 @@ const RoomEditor = ({
     loadInitialCode();
   }, [loadInitialCode]);
 
+  // Broadcast initial cursor position when socketManager connects
+  useEffect(() => {
+    if (socketManager && editorRef.current) {
+      const pos = editorRef.current.getPosition();
+      if (pos && (socketManager.connected || socketManager.client?.connected)) {
+        socketManager.sendCursor(pos.lineNumber, pos.column, clientIdRef.current);
+      }
+    }
+  }, [socketManager]);
+
   // Purge any remote cursor widgets whose owner is offline
   useEffect(() => {
     if (!participants) return;
@@ -200,6 +233,15 @@ const RoomEditor = ({
       }
     });
     listenerDisposablesRef.current.push(cursorDisp);
+
+    // Publish initial cursor position upon listener setup
+    const initialPos = editor.getPosition();
+    if (initialPos) {
+      const socket = socketManagerRef.current;
+      if (socket && (socket.connected || socket.client?.connected)) {
+        socket.sendCursor(initialPos.lineNumber, initialPos.column, clientIdRef.current);
+      }
+    }
 
     // 2. Listen to local typing changes and publish deltas
     const contentDisp = editor.onDidChangeModelContent((event) => {
@@ -446,10 +488,23 @@ const RoomEditor = ({
         return;
       }
 
-      // If clientId is missing, fall back to comparing user IDs
+      // Filter out any cursor belonging to the current logged-in user
+      const currentUser = userRef.current;
       const remoteUserId = cursorMsg.userId;
-      const currentUserId = userRef.current?.id;
-      if (!cursorMsg.clientId && remoteUserId && currentUserId && String(remoteUserId) === String(currentUserId)) {
+      const currentUserId = currentUser?.id;
+      if (remoteUserId && currentUserId && String(remoteUserId) === String(currentUserId)) {
+        return;
+      }
+
+      const remoteUsername = (cursorMsg.username || '').toLowerCase().trim();
+      const remoteDisplayName = (cursorMsg.displayName || cursorMsg.userName || '').toLowerCase().trim();
+      const myUsername = (currentUser?.username || '').toLowerCase().trim();
+      const myDisplayName = (currentUser?.displayName || '').toLowerCase().trim();
+      const myEmail = (currentUser?.email || '').toLowerCase().trim();
+
+      const isSelfName = (remoteUsername && (remoteUsername === myUsername || remoteUsername === myEmail)) ||
+                         (remoteDisplayName && (remoteDisplayName === myDisplayName || remoteDisplayName === myUsername));
+      if (isSelfName) {
         return;
       }
 
@@ -468,7 +523,7 @@ const RoomEditor = ({
         peerWidgetsRef.current.set(clientKey, peerData);
       }
 
-      peerData.widget.updatePosition(line, col);
+      peerData.widget.update(line, col, userName, color);
 
       // Auto-hide inactive remote cursor after 20 seconds of no movement
       if (peerData.timer) {
