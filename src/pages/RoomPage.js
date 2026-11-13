@@ -166,14 +166,37 @@ const RoomPage = () => {
                       presenceMsg.type === 'OFFLINE' ||
                       presenceMsg.status === 'OFFLINE';
 
-      // 1. If backend gave a full updated participants list, use it
+      // 1. If backend gave a full updated participants list, use it with target overrides
       if (Array.isArray(presenceMsg.participants) && presenceMsg.participants.length > 0) {
-        const mapped = presenceMsg.participants.map((p) => {
-          if (currentUserId && String(p.userId) === String(currentUserId)) {
+        let mapped = presenceMsg.participants.map((p) => {
+          const isTarget = presenceMsg.userId && String(p.userId) === String(presenceMsg.userId);
+          const isSelf = currentUserId && String(p.userId) === String(currentUserId);
+          if (isSelf) {
+            return { ...p, online: true };
+          }
+          if (isTarget && isLeave) {
+            return { ...p, online: false };
+          }
+          if (isTarget && !isLeave) {
             return { ...p, online: true };
           }
           return { ...p, online: p.online === true || p.online === 'true' };
         });
+
+        // If a new participant joined and is not yet in the list, append them
+        if (presenceMsg.userId && !isLeave) {
+          const exists = mapped.some((p) => String(p.userId) === String(presenceMsg.userId));
+          if (!exists) {
+            mapped.push({
+              userId: presenceMsg.userId,
+              displayName: presenceMsg.displayName || presenceMsg.username || 'Collaborator',
+              online: true,
+              role: 'EDITOR',
+              roles: 'EDITOR'
+            });
+          }
+        }
+
         setParticipants(mapped);
         return;
       }
@@ -187,7 +210,8 @@ const RoomPage = () => {
               userId: presenceMsg.userId,
               displayName: presenceMsg.displayName || presenceMsg.username || 'Collaborator',
               online: true,
-              role: 'EDITOR'
+              role: 'EDITOR',
+              roles: 'EDITOR'
             };
             return [...prev, newParticipant];
           }
@@ -205,7 +229,7 @@ const RoomPage = () => {
       }
     });
 
-    // Send periodic presence heartbeat every 15 seconds
+    // Send periodic presence heartbeat every 10 seconds
     const heartbeatInterval = setInterval(() => {
       if (manager && (manager.connected || manager.client?.connected)) {
         const currentUser = userRef.current;

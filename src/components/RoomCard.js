@@ -63,20 +63,25 @@ const RoomCard = ({ room, currentUserId, onDelete }) => {
             {roomName}
           </h2>
           <div className="flex items-center gap-1.5">
-            {isOwner && (
+            {isOwner ? (
               <span className="flex items-center gap-1 rounded-full bg-purple-950/70 border border-purple-800/50 px-2 py-0.5 text-[11px] font-semibold text-purple-300">
                 <TbCrownFilled className="text-xs text-amber-400" />
                 Owner
               </span>
+            ) : (
+              <span className="flex items-center gap-1 rounded-full bg-slate-800/80 border border-gray-700/50 px-2 py-0.5 text-[11px] font-medium text-gray-400">
+                Member
+              </span>
             )}
-            {isOwner && onDelete && (
+            {onDelete && (
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelete(room);
                 }}
-                title="Delete room"
+                title={isOwner ? "Delete room permanently" : "Delete room for yourself"}
+                aria-label={isOwner ? "Delete room permanently" : "Delete room for yourself"}
                 className="rounded-lg p-1 text-gray-400 hover:bg-rose-950/60 hover:text-rose-400 transition"
               >
                 <FiTrash2 className="text-sm" />

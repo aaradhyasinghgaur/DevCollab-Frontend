@@ -12,8 +12,8 @@ const ParticipantPanel = ({
   // Sort participants: Active participants at the top, followed by offline participants
   const sortedParticipants = useMemo(() => {
     return [...participants].sort((a, b) => {
-      const aOnline = a.online === true;
-      const bOnline = b.online === true;
+      const aOnline = a.online === true || a.online === 'true';
+      const bOnline = b.online === true || b.online === 'true';
 
       // 1. Online participants first
       if (aOnline !== bOnline) {
@@ -38,7 +38,7 @@ const ParticipantPanel = ({
     });
   }, [participants, currentUserId]);
 
-  const activeCount = participants.filter((p) => p.online === true).length;
+  const activeCount = participants.filter((p) => p.online === true || p.online === 'true').length;
 
   return (
     <div className="flex flex-col h-full bg-slate-900 border-l border-gray-800/80 text-white">

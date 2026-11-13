@@ -129,11 +129,17 @@ const Dashboard = () => {
     }
   };
 
-  // Handle Delete Room (Owner)
+  // Handle Delete Room (Owner or Member)
   const handleDeleteRoom = async (roomToDelete) => {
     const rId = roomToDelete.roomId || roomToDelete.id;
     const rName = roomToDelete.roomName || roomToDelete.name || 'this room';
-    if (window.confirm(`Are you sure you want to permanently delete "${rName}"? All data and participant access will be removed.`)) {
+    const isOwner = user?.id && String(roomToDelete.ownerId) === String(user.id);
+
+    const confirmMessage = isOwner
+      ? `Are you sure you want to permanently delete "${rName}"? All data and participant access will be removed.`
+      : `Are you sure you want to delete "${rName}" for yourself? It will be removed from your workspace, but other members will not be affected.`;
+
+    if (window.confirm(confirmMessage)) {
       try {
         await roomApi.delete(rId);
         fetchRooms();
@@ -265,6 +271,7 @@ const Dashboard = () => {
                       key={room.roomId || room.id}
                       room={room}
                       currentUserId={user?.id}
+                      onDelete={handleDeleteRoom}
                     />
                   ))}
                 </div>

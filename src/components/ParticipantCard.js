@@ -104,7 +104,7 @@ const ParticipantCard = ({
   const colorIndex = Math.abs(Number(participant.userId || 0)) % AVATAR_COLORS.length;
   const avatarBg = AVATAR_COLORS[colorIndex];
 
-  const isOnline = participant.online === true;
+  const isOnline = participant.online === true || participant.online === 'true';
   const isSelf = String(participant.userId) === String(currentUserId);
   const canKick = isOwner && !isSelf && role !== 'OWNER';
   const canChangeRole = isOwner && !isSelf && role !== 'OWNER';

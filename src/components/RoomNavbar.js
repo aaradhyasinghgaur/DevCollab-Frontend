@@ -73,6 +73,26 @@ const RoomNavbar = ({ room, socketManager }) => {
     }
   };
 
+  const handleDeleteRoomForSelf = async () => {
+    const targetRoomId = room?.roomId || room?.id;
+    const targetRoomName = room?.roomName || room?.name || 'this room';
+    if (!targetRoomId) return;
+
+    if (window.confirm(`Are you sure you want to delete "${targetRoomName}" for yourself? It will be removed from your workspace, but other members will not be affected.`)) {
+      try {
+        setLeaving(true);
+        if (socketManager) {
+          socketManager.leave();
+        }
+        await roomApi.delete(targetRoomId);
+      } catch (e) {
+        console.warn('Delete room for self error (proceeding to dashboard):', e);
+      } finally {
+        navigate('/dashboard');
+      }
+    }
+  };
+
   return (
     <nav className="flex h-16 items-center justify-between border-b border-gray-800/80 bg-slate-950 px-4 sm:px-6">
       {/* Left: Back / Logo / Room Title */}
@@ -130,7 +150,7 @@ const RoomNavbar = ({ room, socketManager }) => {
           </button>
         )}
 
-        {/* Action Button: Delete Room for Owner, Leave Room for Collaborators */}
+        {/* Action Button: Delete Room for Owner, Leave / Delete for Collaborators */}
         {isOwner ? (
           <button
             onClick={handleDeleteRoom}
@@ -142,15 +162,26 @@ const RoomNavbar = ({ room, socketManager }) => {
             <span className="hidden sm:inline">{leaving ? 'Deleting...' : 'Delete room'}</span>
           </button>
         ) : (
-          <button
-            onClick={handleLeaveRoom}
-            disabled={leaving}
-            title="Leave this room"
-            className="flex items-center gap-1.5 rounded-lg border border-red-950/80 bg-red-950/40 px-3 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-950/80 hover:text-red-300 disabled:opacity-50"
-          >
-            <TbDoorExit className="text-base" />
-            <span className="hidden sm:inline">{leaving ? 'Leaving...' : 'Leave room'}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleLeaveRoom}
+              disabled={leaving}
+              title="Leave room session (keep on dashboard)"
+              className="flex items-center gap-1.5 rounded-lg border border-gray-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:bg-slate-800 hover:text-white disabled:opacity-50"
+            >
+              <TbDoorExit className="text-base" />
+              <span className="hidden sm:inline">{leaving ? 'Leaving...' : 'Leave session'}</span>
+            </button>
+            <button
+              onClick={handleDeleteRoomForSelf}
+              disabled={leaving}
+              title="Delete this room for yourself"
+              className="flex items-center gap-1.5 rounded-lg border border-rose-900/70 bg-rose-950/60 px-3 py-1.5 text-xs font-semibold text-rose-400 transition hover:bg-rose-900/80 hover:text-rose-200 hover:border-rose-700 disabled:opacity-50"
+            >
+              <FiTrash2 className="text-sm" />
+              <span className="hidden sm:inline">{leaving ? 'Deleting...' : 'Delete room'}</span>
+            </button>
+          </div>
         )}
       </div>
     </nav>

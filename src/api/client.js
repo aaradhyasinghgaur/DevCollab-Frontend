@@ -116,6 +116,9 @@ export const roomApi = {
   delete: (roomId) => request(`/api/rooms/${roomId}`, {
     method: 'DELETE'
   }),
+  deleteForSelf: (roomId) => request(`/api/rooms/${roomId}/member`, {
+    method: 'DELETE'
+  }),
   kickParticipant: (roomId, userId) => request(`/api/rooms/${roomId}/participants/${userId}`, {
     method: 'DELETE'
   }),

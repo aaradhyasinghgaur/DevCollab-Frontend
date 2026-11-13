@@ -284,7 +284,10 @@ export class RoomSocketManager {
         });
       } catch (e) {}
     }
-    this.disconnect();
+    // Allow the outgoing LEAVE STOMP packet to flush before deactivating socket
+    setTimeout(() => {
+      this.disconnect();
+    }, 150);
   }
 
   sendCodeEdit(operation) {

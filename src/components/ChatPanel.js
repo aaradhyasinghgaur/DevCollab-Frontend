@@ -6,6 +6,46 @@ import { FiSend, FiMessageSquare } from 'react-icons/fi';
 const isValidUuid = (val) =>
   typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
 
+export const formatMessageTime = (msg) => {
+  if (!msg) return '';
+
+  // 1. If numeric epoch timestamp is provided
+  if (typeof msg.timestamp === 'number') {
+    const ms = msg.timestamp < 1e11 ? msg.timestamp * 1000 : msg.timestamp;
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+  }
+
+  // 2. Parse createdAt
+  const raw = msg.createdAt;
+  if (!raw) return '';
+
+  if (typeof raw === 'number') {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+  }
+
+  if (typeof raw === 'string') {
+    let dateStr = raw.trim();
+    // If backend serialized LocalDateTime without 'Z' or timezone offset,
+    // it was generated in UTC, so append 'Z' to correctly parse as UTC and display in local time!
+    if (!dateStr.endsWith('Z') && !/[+-]\d{2}(?::?\d{2})?$/.test(dateStr)) {
+      dateStr += 'Z';
+    }
+
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+  }
+
+  return '';
+};
+
 const ChatPanel = ({ roomId, socketManager }) => {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
@@ -178,10 +218,7 @@ const ChatPanel = ({ roomId, socketManager }) => {
             }
 
             const senderInitial = senderDisplayName.charAt(0).toUpperCase();
-            const timeRaw = msg.createdAt || msg.timestamp;
-            const timeStr = timeRaw
-              ? new Date(timeRaw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : '';
+            const timeStr = formatMessageTime(msg);
 
             return (
               <div
